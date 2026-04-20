@@ -6,8 +6,24 @@ import { calcPayroll, rm } from "@/lib/calculations";
 import { TrendingUp, DollarSign, Clock, AlertCircle, FileWarning, CheckCircle2 } from "lucide-react";
 import Loading from "@/components/Loading";
 
-const MONTH = "2026-04";
-const MONTH_LABEL = "April 2026";
+function currentMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthLabel(m: string) {
+  const [y, mo] = m.split("-");
+  return new Date(Number(y), Number(mo) - 1, 1).toLocaleString("en-MY", { month: "long", year: "numeric" });
+}
+function last12Months() {
+  const months: string[] = [];
+  const now = new Date();
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+  return months;
+}
+
 const BRANCH_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   a: { bg: "rgba(13,148,136,0.08)",  text: "#2DD4BF", dot: "#0D9488" },
   b: { bg: "rgba(99,102,241,0.08)",  text: "#818CF8", dot: "#6366F1" },
@@ -23,15 +39,16 @@ export default function DashboardPage() {
   const [statuses, setStatuses]         = useState<Record<string, "draft" | "finalised">>({});
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState<string | null>(null);
+  const [month, setMonth]               = useState(currentMonth);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(month); }, [month]);
 
-  async function load() {
+  async function load(m: string) {
     try {
       setLoading(true);
       const [b, s, r, a, tt, st] = await Promise.all([
-        fetchBranches(), fetchStaff(), fetchTreatmentRecords(MONTH),
-        fetchAttendanceRecords(MONTH), fetchTreatmentTypes(), fetchPayrollStatuses(MONTH),
+        fetchBranches(), fetchStaff(), fetchTreatmentRecords(m),
+        fetchAttendanceRecords(m), fetchTreatmentTypes(), fetchPayrollStatuses(m),
       ]);
       setBranches(b); setStaff(s); setRecords(r);
       setAttendance(a); setTTypes(tt); setStatuses(st);
@@ -48,7 +65,7 @@ export default function DashboardPage() {
   if (error)   return <div className="p-8 text-red-400">Error: {error}</div>;
 
   const activeStaff = staff.filter((s) => s.isActive);
-  const payrolls = activeStaff.map((s) => calcPayroll(s, MONTH, records, attendance, treatmentTypes));
+  const payrolls = activeStaff.map((s) => calcPayroll(s, month, records, attendance, treatmentTypes));
 
   const totalGross    = payrolls.reduce((s, p) => s + p.grossPay, 0);
   const totalComm     = payrolls.reduce((s, p) => s + p.totalCommission, 0);
@@ -70,7 +87,7 @@ export default function DashboardPage() {
   const pendingCount    = activeStaff.filter((s) => statuses[s.id] !== "finalised").length;
 
   const kpis = [
-    { label: "Total Collection",  value: rm(totalCollection), sub: MONTH_LABEL,                           icon: TrendingUp,  color: "#0D9488" },
+    { label: "Total Collection",  value: rm(totalCollection), sub: monthLabel(month),                     icon: TrendingUp,  color: "#0D9488" },
     { label: "Total Payroll Cost",value: rm(totalGross),      sub: `EPF Employer: ${rm(totalEpfEr)}`,     icon: DollarSign,  color: "#6366F1" },
     { label: "Commission Payout", value: rm(totalComm),       sub: "Dentists only",                       icon: DollarSign,  color: "#F59E0B" },
     { label: "OT Hours",          value: `${totalOtHours.toFixed(1)} hrs`, sub: `${rm(totalOtPay)} OT pay`, icon: Clock,     color: "#F43F5E" },
@@ -88,11 +105,12 @@ export default function DashboardPage() {
         <div>
           <p className="text-[#7B91BC] text-xs font-mono uppercase tracking-widest mb-1">Overview</p>
           <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">Dashboard</h1>
-          <p className="text-[#7B91BC] text-sm mt-1">Payroll period: {MONTH_LABEL}</p>
+          <p className="text-[#7B91BC] text-sm mt-1">Payroll period: {monthLabel(month)}</p>
         </div>
-        <select className="inp w-auto text-sm" defaultValue={MONTH}>
-          <option value="2026-04">April 2026</option>
-          <option value="2026-03">March 2026</option>
+        <select className="inp w-auto text-sm" value={month} onChange={(e) => setMonth(e.target.value)}>
+          {last12Months().map((m) => (
+            <option key={m} value={m}>{monthLabel(m)}</option>
+          ))}
         </select>
       </div>
 
@@ -101,7 +119,7 @@ export default function DashboardPage() {
         <div className="fade-up delay-1 flex items-center gap-3 px-4 py-3 rounded-xl border border-amber-500/20 bg-amber-500/5">
           <AlertCircle size={16} className="text-amber-400 flex-shrink-0" />
           <p className="text-sm text-amber-300">
-            <strong>{pendingCount} staff</strong> payroll for {MONTH_LABEL} not finalised.{" "}
+            <strong>{pendingCount} staff</strong> payroll for {monthLabel(month)} not finalised.{" "}
             <a href="/payroll" className="underline text-amber-400">Review & Finalise →</a>
           </p>
         </div>
