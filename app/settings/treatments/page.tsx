@@ -3,8 +3,52 @@ import { useEffect, useState } from "react";
 import { TreatmentType } from "@/lib/types";
 import { fetchTreatmentTypes, upsertTreatmentType, deleteTreatmentType } from "@/lib/db";
 import { rm } from "@/lib/calculations";
-import { Plus, Pencil, X, FlaskConical, TestTube } from "lucide-react";
+import { Plus, Pencil, X, FlaskConical, TestTube, Upload, Download, CheckCircle2, AlertCircle } from "lucide-react";
+import { useRef } from "react";
 import Loading from "@/components/Loading";
+
+type CsvRow = { name: string; category: string; defaultFee: number; materialCost: number; variableMaterialCost: boolean; isLabCase: boolean; isOnHold: boolean; error?: string };
+
+function parseTreatmentCsv(text: string): CsvRow[] {
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const rows: CsvRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",").map(c => c.trim().replace(/^"|"$/g, ""));
+    const [name, category, defaultFee, materialCost, variableMaterialCost, isLabCase, isOnHold] = cols;
+    const validCats = ["treatment", "product", "medicine"];
+    rows.push({
+      name: name ?? "",
+      category: validCats.includes(category?.toLowerCase()) ? category.toLowerCase() : "treatment",
+      defaultFee: parseFloat(defaultFee) || 0,
+      materialCost: parseFloat(materialCost) || 0,
+      variableMaterialCost: variableMaterialCost?.toLowerCase() === "yes",
+      isLabCase: isLabCase?.toLowerCase() === "yes",
+      isOnHold: isOnHold?.toLowerCase() === "yes",
+      error: !name?.trim() ? "Missing name" : undefined,
+    });
+  }
+  return rows;
+}
+
+function downloadTemplate() {
+  const header = "Name,Category,Default Fee,Material Cost,Variable Material Cost,Lab Case,On Hold";
+  const examples = [
+    "Scaling,treatment,120,15,no,no,no",
+    "Composite Filling,treatment,200,30,no,no,no",
+    "Root Canal (Anterior),treatment,600,0,yes,no,no",
+    "Crown (PFM),treatment,1200,0,no,yes,no",
+    "Angel Aligner,treatment,350,0,no,no,yes",
+    "Whitening (Click),treatment,2000,2000,no,no,no",
+    "Extraction,treatment,80,5,no,no,no",
+    "Retainer,treatment,300,0,no,no,no",
+    "Tooth Brush,product,15,0,no,no,no",
+    "Antibiotics,medicine,20,0,no,no,no",
+  ].join("\n");
+  const blob = new Blob([header + "\n" + examples], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = "treatments_template.csv"; a.click();
+}
 
 export default function TreatmentsPage() {
   const [types, setTypes]   = useState<TreatmentType[]>([]);
@@ -12,6 +56,11 @@ export default function TreatmentsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
   const [modal, setModal]   = useState<{ open: boolean; data: Partial<TreatmentType> }>({ open: false, data: {} });
+  const [importModal, setImportModal] = useState(false);
+  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importDone, setImportDone] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { load(); }, []);
 
@@ -26,7 +75,7 @@ export default function TreatmentsPage() {
     }
   }
 
-  function openAdd() { setModal({ open: true, data: { isLabCase: false, materialCost: 0, defaultFee: 0, saleCategory: "treatment" } }); }
+  function openAdd() { setModal({ open: true, data: { isLabCase: false, variableMaterialCost: false, materialCost: 0, defaultFee: 0, saleCategory: "treatment" } }); }
   function openEdit(t: TreatmentType) { setModal({ open: true, data: { ...t } }); }
   function closeModal() { setModal({ open: false, data: {} }); }
   const set = (k: keyof TreatmentType, v: unknown) => setModal((m) => ({ ...m, data: { ...m.data, [k]: v } }));
@@ -57,6 +106,42 @@ export default function TreatmentsPage() {
     } catch { setError("Failed to delete — this treatment may be in use."); }
   }
 
+  function handleCsvFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const rows = parseTreatmentCsv(e.target?.result as string);
+      setCsvRows(rows); setImportDone(false);
+    };
+    reader.readAsText(file);
+  }
+
+  async function handleImportConfirm() {
+    const valid = csvRows.filter(r => !r.error && r.name);
+    if (!valid.length) return;
+    try {
+      setImporting(true);
+      const saved = await Promise.all(valid.map(r => upsertTreatmentType({
+        name: r.name,
+        saleCategory: r.category as TreatmentType["saleCategory"],
+        defaultFee: r.defaultFee,
+        materialCost: r.variableMaterialCost ? 0 : r.materialCost,
+        variableMaterialCost: r.variableMaterialCost,
+        isLabCase: r.isLabCase,
+        isOnHold: r.isOnHold,
+      })));
+      setTypes(prev => {
+        const map = Object.fromEntries(prev.map(t => [t.id, t]));
+        for (const t of saved) map[t.id] = t;
+        return Object.values(map);
+      });
+      setImportDone(true);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   const treatments = types.filter((t) => t.saleCategory === "treatment" && !t.isLabCase);
   const labCases   = types.filter((t) => t.saleCategory === "treatment" && t.isLabCase);
   const products   = types.filter((t) => t.saleCategory === "product");
@@ -78,7 +163,11 @@ export default function TreatmentsPage() {
           <p className="text-[#7B91BC] text-xs font-mono uppercase tracking-widest mb-1">Settings</p>
           <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">Treatment & Cost Setup</h1>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}><Plus size={14} /> Add</button>
+        <div className="flex gap-2 flex-wrap">
+          <button className="btn btn-ghost text-sm" onClick={downloadTemplate}><Download size={14} /> Template</button>
+          <button className="btn btn-ghost text-sm" onClick={() => { setImportModal(true); setCsvRows([]); setImportDone(false); }}><Upload size={14} /> Import CSV</button>
+          <button className="btn btn-primary" onClick={openAdd}><Plus size={14} /> Add</button>
+        </div>
       </div>
 
       {error && <div className="px-4 py-3 rounded-xl border border-red-500/20 bg-red-500/5 text-sm text-red-400">{error}</div>}
@@ -110,10 +199,16 @@ export default function TreatmentsPage() {
           <tbody>
             {treatments.map((t) => (
               <tr key={t.id}>
-                <td><div className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-teal-400" /><span className="text-sm font-medium text-[#E8F0FF]">{t.name}</span></div></td>
+                <td><div className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-teal-400" /><span className="text-sm font-medium text-[#E8F0FF]">{t.name}</span>{t.isOnHold && <span className="badge text-[10px]" style={{ background: "rgba(245,158,11,0.1)", color: "#F59E0B", border: "1px solid rgba(245,158,11,0.2)" }}>On Hold</span>}</div></td>
                 <td className="text-right font-mono text-sm text-[#E8F0FF]">{rm(t.defaultFee)}</td>
-                <td className="text-right font-mono text-sm text-red-400">{t.materialCost > 0 ? `−${rm(t.materialCost)}` : <span className="text-[#7B91BC]">—</span>}</td>
-                <td className="text-right font-mono text-sm font-bold text-teal-400">{rm(t.defaultFee - t.materialCost)}</td>
+                <td className="text-right font-mono text-sm text-red-400">
+                  {t.variableMaterialCost
+                    ? <span className="badge" style={{ background: "rgba(139,92,246,0.1)", color: "#A78BFA", border: "1px solid rgba(139,92,246,0.2)" }}>Variable</span>
+                    : t.materialCost > 0 ? `−${rm(t.materialCost)}` : <span className="text-[#7B91BC]">—</span>}
+                </td>
+                <td className="text-right font-mono text-sm font-bold text-teal-400">
+                  {t.variableMaterialCost ? <span className="text-[#7B91BC] text-xs">entered per case</span> : rm(t.defaultFee - t.materialCost)}
+                </td>
                 <td><TblActions t={t} /></td>
               </tr>
             ))}
@@ -191,6 +286,91 @@ export default function TreatmentsPage() {
         </table>
       </div>
 
+      {/* Import Modal */}
+      {importModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setImportModal(false)} />
+          <div className="relative bg-[#0D1526] border border-[#1E2D4A] rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#1E2D4A]">
+              <h2 className="font-display font-bold text-[#E8F0FF]">Bulk Import Treatments</h2>
+              <button className="text-[#7B91BC] hover:text-[#E8F0FF]" onClick={() => setImportModal(false)}><X size={18} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              {/* Upload zone */}
+              <div
+                className="border-2 border-dashed border-[#1E2D4A] rounded-xl p-6 text-center cursor-pointer hover:border-teal-500/40 transition-colors"
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCsvFile(f); }}
+              >
+                <Upload size={24} className="mx-auto text-[#7B91BC] mb-2" />
+                <p className="text-sm text-[#E8F0FF] font-medium">Drop CSV here or click to browse</p>
+                <p className="text-xs text-[#7B91BC] mt-1">Columns: Name, Category, Default Fee, Material Cost, Variable Material Cost, Lab Case, On Hold</p>
+                <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleCsvFile(f); }} />
+              </div>
+
+              {/* Preview table */}
+              {csvRows.length > 0 && !importDone && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-[#E8F0FF]">{csvRows.filter(r => !r.error).length} valid · {csvRows.filter(r => r.error).length} errors</p>
+                  </div>
+                  <div className="rounded-xl border border-[#1E2D4A] overflow-hidden max-h-64 overflow-y-auto">
+                    <table className="tbl text-xs">
+                      <thead><tr><th>Name</th><th>Category</th><th className="text-right">Fee</th><th className="text-right">Mat. Cost</th><th>Flags</th><th></th></tr></thead>
+                      <tbody>
+                        {csvRows.map((row, i) => (
+                          <tr key={i} className={row.error ? "bg-red-500/5" : ""}>
+                            <td className="font-medium text-[#E8F0FF]">{row.name || <span className="text-red-400">—</span>}</td>
+                            <td><span className="capitalize text-[#7B91BC]">{row.category}</span></td>
+                            <td className="text-right font-mono">{rm(row.defaultFee)}</td>
+                            <td className="text-right font-mono">{row.variableMaterialCost ? <span className="text-violet-400">Variable</span> : rm(row.materialCost)}</td>
+                            <td className="space-x-1">
+                              {row.isLabCase && <span className="badge text-[10px]" style={{ background: "rgba(99,102,241,0.1)", color: "#818CF8", border: "1px solid rgba(99,102,241,0.2)" }}>Lab</span>}
+                              {row.isOnHold && <span className="badge text-[10px]" style={{ background: "rgba(245,158,11,0.1)", color: "#F59E0B", border: "1px solid rgba(245,158,11,0.2)" }}>On Hold</span>}
+                            </td>
+                            <td>{row.error ? <span className="text-red-400 text-[10px]">{row.error}</span> : <CheckCircle2 size={12} className="text-teal-400" />}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    <button className="btn btn-ghost" onClick={() => setCsvRows([])}>Clear</button>
+                    <button className="btn btn-primary" onClick={handleImportConfirm} disabled={importing || !csvRows.some(r => !r.error)}>
+                      {importing ? "Importing..." : `Import ${csvRows.filter(r => !r.error).length} Treatments`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {importDone && (
+                <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-teal-500/20 bg-teal-500/5">
+                  <CheckCircle2 size={16} className="text-teal-400 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-teal-300">{csvRows.filter(r => !r.error).length} treatments imported successfully.</p>
+                    <p className="text-xs text-[#7B91BC] mt-0.5">You can close this window or import another file.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Instructions */}
+              <div className="rounded-xl border border-[#1E2D4A] p-4 space-y-2">
+                <p className="text-xs font-bold uppercase tracking-widest text-[#7B91BC]">Column Guide</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-[#7B91BC]">
+                  <div><span className="text-[#E8F0FF]">Category</span> — treatment / product / medicine</div>
+                  <div><span className="text-[#E8F0FF]">Variable Material Cost</span> — yes / no</div>
+                  <div><span className="text-[#E8F0FF]">Default Fee</span> — number (e.g. 200)</div>
+                  <div><span className="text-[#E8F0FF]">Lab Case</span> — yes / no</div>
+                  <div><span className="text-[#E8F0FF]">Material Cost</span> — number, ignored if Variable = yes</div>
+                  <div><span className="text-[#E8F0FF]">On Hold</span> — yes / no</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal */}
       {modal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -221,20 +401,43 @@ export default function TreatmentsPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Material Cost (RM)</label>
-                  <input className="inp" type="number" placeholder="0.00" value={modal.data.materialCost ?? ""} onChange={(e) => set("materialCost", parseFloat(e.target.value) || 0)} />
+                  <input className="inp" type="number" placeholder="0.00" disabled={!!modal.data.variableMaterialCost}
+                    value={modal.data.variableMaterialCost ? "" : (modal.data.materialCost ?? "")}
+                    onChange={(e) => set("materialCost", parseFloat(e.target.value) || 0)} />
                 </div>
               </div>
             )}
             {modal.data.saleCategory === "treatment" && (
-              <label className="flex items-center gap-3 cursor-pointer">
-                <div className={`w-10 h-5 rounded-full transition-colors ${modal.data.isLabCase ? "bg-indigo-500" : "bg-[#1E2D4A]"}`} onClick={() => set("isLabCase", !modal.data.isLabCase)}>
-                  <div className={`w-4 h-4 rounded-full bg-white mt-0.5 ml-0.5 transition-transform ${modal.data.isLabCase ? "translate-x-5" : ""}`} />
-                </div>
-                <div>
-                  <p className="text-sm text-[#E8F0FF] font-medium">Lab case</p>
-                  <p className="text-xs text-[#7B91BC]">Lab cost entered per patient</p>
-                </div>
-              </label>
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <div className={`w-10 h-5 rounded-full transition-colors ${modal.data.variableMaterialCost ? "bg-violet-500" : "bg-[#1E2D4A]"}`}
+                    onClick={() => { set("variableMaterialCost", !modal.data.variableMaterialCost); if (!modal.data.variableMaterialCost) set("materialCost", 0); }}>
+                    <div className={`w-4 h-4 rounded-full bg-white mt-0.5 ml-0.5 transition-transform ${modal.data.variableMaterialCost ? "translate-x-5" : ""}`} />
+                  </div>
+                  <div>
+                    <p className="text-sm text-[#E8F0FF] font-medium">Variable material cost</p>
+                    <p className="text-xs text-[#7B91BC]">Cost differs per case — entered in Payroll each month</p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <div className={`w-10 h-5 rounded-full transition-colors ${modal.data.isLabCase ? "bg-indigo-500" : "bg-[#1E2D4A]"}`} onClick={() => set("isLabCase", !modal.data.isLabCase)}>
+                    <div className={`w-4 h-4 rounded-full bg-white mt-0.5 ml-0.5 transition-transform ${modal.data.isLabCase ? "translate-x-5" : ""}`} />
+                  </div>
+                  <div>
+                    <p className="text-sm text-[#E8F0FF] font-medium">Lab case</p>
+                    <p className="text-xs text-[#7B91BC]">Lab cost entered per patient</p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <div className={`w-10 h-5 rounded-full transition-colors ${modal.data.isOnHold ? "bg-amber-500" : "bg-[#1E2D4A]"}`} onClick={() => set("isOnHold", !modal.data.isOnHold)}>
+                    <div className={`w-4 h-4 rounded-full bg-white mt-0.5 ml-0.5 transition-transform ${modal.data.isOnHold ? "translate-x-5" : ""}`} />
+                  </div>
+                  <div>
+                    <p className="text-sm text-[#E8F0FF] font-medium">Payment on Hold</p>
+                    <p className="text-xs text-[#7B91BC]">Fees excluded from commission until costs are confirmed next month</p>
+                  </div>
+                </label>
+              </div>
             )}
             <div className="flex justify-end gap-3 pt-2">
               <button className="btn btn-ghost" onClick={closeModal}>Cancel</button>

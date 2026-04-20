@@ -1,10 +1,18 @@
 import { supabase } from "./supabase";
 import { Branch, Staff, TreatmentType, TreatmentRecord, AttendanceRecord } from "./types";
 
+export type PerformanceAllowanceMap = Record<string, number>;
+
 function nextMonth(month: string): string {
   const [y, m] = month.split("-").map(Number);
-  const d = new Date(y, m, 1); // m is already 1-indexed; new Date(y, m, 1) gives 1st of next month
+  const d = new Date(y, m, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function nextMonthStr(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(y, m, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 // ── Branches ────────────────────────────────────────────────────────────────
@@ -38,6 +46,7 @@ export async function fetchStaff(): Promise<Staff[]> {
     socsoNumber: r.socso_number,
     isActive: r.is_active,
     joinDate: r.join_date,
+    performanceAllowanceCap: r.performance_allowance_cap ?? 0,
   }));
 }
 
@@ -57,6 +66,7 @@ export async function upsertStaff(s: Partial<Staff>): Promise<Staff> {
     socso_number: s.socsoNumber ?? null,
     is_active: s.isActive ?? true,
     join_date: s.joinDate ?? null,
+    performance_allowance_cap: s.performanceAllowanceCap ?? 0,
   };
   const { data, error } = await supabase
     .from("staff")
@@ -71,7 +81,25 @@ export async function upsertStaff(s: Partial<Staff>): Promise<Staff> {
     icNumber: data.ic_number, bankAccount: data.bank_account,
     epfNumber: data.epf_number, socsoNumber: data.socso_number,
     isActive: data.is_active, joinDate: data.join_date,
+    performanceAllowanceCap: data.performance_allowance_cap ?? 0,
   };
+}
+
+// ── Performance Allowances ───────────────────────────────────────────────────
+export async function fetchPerformanceAllowances(month: string): Promise<PerformanceAllowanceMap> {
+  const { data, error } = await supabase
+    .from("performance_allowances")
+    .select("staff_id, amount")
+    .eq("month", month);
+  if (error) throw error;
+  return Object.fromEntries(data.map((r) => [r.staff_id, r.amount ?? 0]));
+}
+
+export async function upsertPerformanceAllowance(staffId: string, month: string, amount: number) {
+  const { error } = await supabase
+    .from("performance_allowances")
+    .upsert({ staff_id: staffId, month, amount }, { onConflict: "staff_id,month" });
+  if (error) throw error;
 }
 
 export async function setStaffActive(id: string, isActive: boolean) {
@@ -89,6 +117,8 @@ export async function fetchTreatmentTypes(): Promise<TreatmentType[]> {
     defaultFee: r.default_fee,
     materialCost: r.material_cost,
     isLabCase: r.is_lab_case,
+    variableMaterialCost: r.variable_material_cost ?? false,
+    isOnHold: r.is_on_hold ?? false,
     saleCategory: r.sale_category,
   }));
 }
@@ -100,6 +130,8 @@ export async function upsertTreatmentType(t: Partial<TreatmentType>): Promise<Tr
     default_fee: t.defaultFee ?? 0,
     material_cost: t.materialCost ?? 0,
     is_lab_case: t.isLabCase ?? false,
+    variable_material_cost: t.variableMaterialCost ?? false,
+    is_on_hold: t.isOnHold ?? false,
     sale_category: t.saleCategory ?? "treatment",
   };
   const { data, error } = await supabase
@@ -111,6 +143,8 @@ export async function upsertTreatmentType(t: Partial<TreatmentType>): Promise<Tr
   return {
     id: data.id, name: data.name, defaultFee: data.default_fee,
     materialCost: data.material_cost, isLabCase: data.is_lab_case,
+    variableMaterialCost: data.variable_material_cost ?? false,
+    isOnHold: data.is_on_hold ?? false,
     saleCategory: data.sale_category,
   };
 }
@@ -121,25 +155,43 @@ export async function deleteTreatmentType(id: string) {
 }
 
 // ── Treatment Records ────────────────────────────────────────────────────────
+function mapRecord(r: Record<string, unknown>): TreatmentRecord {
+  return {
+    id: r.id as string,
+    date: r.date as string,
+    patientName: r.patient_name as string,
+    staffId: r.staff_id as string,
+    branchId: r.branch_id as string,
+    treatmentTypeId: r.treatment_type_id as string,
+    fee: r.fee as number,
+    labCost: r.lab_cost as number | undefined,
+    materialCostOverride: r.material_cost_override != null ? r.material_cost_override as number : undefined,
+    isOnHold: (r.is_on_hold as boolean) ?? false,
+    releaseMonth: r.release_month as string | undefined,
+    saleCategory: r.sale_category as TreatmentRecord["saleCategory"],
+  };
+}
+
 export async function fetchTreatmentRecords(month: string): Promise<TreatmentRecord[]> {
-  const { data, error } = await supabase
+  // Current month's records
+  const { data: current, error: e1 } = await supabase
     .from("treatment_records")
     .select("*")
     .gte("date", `${month}-01`)
     .lt("date", nextMonth(month))
     .order("date");
-  if (error) throw error;
-  return data.map((r) => ({
-    id: r.id,
-    date: r.date,
-    patientName: r.patient_name,
-    staffId: r.staff_id,
-    branchId: r.branch_id,
-    treatmentTypeId: r.treatment_type_id,
-    fee: r.fee,
-    labCost: r.lab_cost,
-    saleCategory: r.sale_category,
-  }));
+  if (e1) throw e1;
+
+  // Deferred records from previous months queued for this month
+  const { data: deferred, error: e2 } = await supabase
+    .from("treatment_records")
+    .select("*")
+    .eq("release_month", month)
+    .lt("date", `${month}-01`)
+    .order("date");
+  if (e2) throw e2;
+
+  return [...current.map(mapRecord), ...deferred.map(mapRecord)];
 }
 
 export async function insertTreatmentRecords(records: Omit<TreatmentRecord, "id">[]) {
@@ -154,6 +206,44 @@ export async function insertTreatmentRecords(records: Omit<TreatmentRecord, "id"
     sale_category: r.saleCategory,
   }));
   const { error } = await supabase.from("treatment_records").insert(rows);
+  if (error) throw error;
+}
+
+export async function updateMaterialCostOverride(recordId: string, amount: number) {
+  const { error } = await supabase
+    .from("treatment_records")
+    .update({ material_cost_override: amount })
+    .eq("id", recordId);
+  if (error) throw error;
+}
+
+export async function updateLabCost(recordId: string, amount: number) {
+  const { error } = await supabase
+    .from("treatment_records")
+    .update({ lab_cost: amount })
+    .eq("id", recordId);
+  if (error) throw error;
+}
+
+export async function updateRecordOnHold(recordId: string, isOnHold: boolean, currentMonth?: string) {
+  const updates: Record<string, unknown> = { is_on_hold: isOnHold };
+  if (isOnHold && currentMonth) {
+    updates.release_month = nextMonthStr(currentMonth);
+  } else if (!isOnHold) {
+    updates.release_month = null;
+  }
+  const { error } = await supabase
+    .from("treatment_records")
+    .update(updates)
+    .eq("id", recordId);
+  if (error) throw error;
+}
+
+export async function updateSaleCategory(recordId: string, saleCategory: "treatment" | "product" | "medicine") {
+  const { error } = await supabase
+    .from("treatment_records")
+    .update({ sale_category: saleCategory })
+    .eq("id", recordId);
   if (error) throw error;
 }
 

@@ -1,40 +1,134 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Branch } from "@/lib/types";
-import { fetchBranches, insertTreatmentRecords, fetchTreatmentTypes, fetchStaff } from "@/lib/db";
-import { Upload, CheckCircle2, FileSpreadsheet, AlertCircle, X } from "lucide-react";
+import { fetchBranches, insertTreatmentRecords, fetchTreatmentTypes, fetchStaff, deleteTreatmentRecordsByBranchMonth } from "@/lib/db";
+import { Upload, CheckCircle2, FileSpreadsheet, AlertCircle, X, Download, Trash2, ArrowRight } from "lucide-react";
 import Loading from "@/components/Loading";
 
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 
-type PreviewRow = { date: string; staff: string; treatment: string; fee: number; patient: string };
+const MONTHS = [
+  { label: "April 2026",    value: "2026-04" },
+  { label: "March 2026",   value: "2026-03" },
+  { label: "February 2026", value: "2026-02" },
+  { label: "January 2026",  value: "2026-01" },
+  { label: "December 2025", value: "2025-12" },
+  { label: "November 2025", value: "2025-11" },
+];
+
+type PreviewRow = { date: string; staff: string; treatment: string; fee: number; labCost?: number; patient: string; saleCategory?: "treatment" | "product" | "medicine" };
+
 type HistoryEntry = { id: string; branchId: string; branchName: string; month: string; importedAt: string; recordCount: number; totalAmount: number; filename: string };
 
-const MONTH = "2026-04";
-const MONTH_LABEL = "April 2026";
+function downloadTemplate() {
+  const csv = [
+    "Date,Staff,Patient,Item,Category,Fee,LabCost",
+    "2026-04-01,Dr. Ahmad bin Ali,Tan Ah Kow,Scaling,treatment,120,0",
+    "2026-04-01,Dr. Ahmad bin Ali,Lim Mei Lin,Toothbrush,product,15,0",
+    "2026-04-02,Dr. Sarah Lee,Wong Chee Keong,Amoxicillin,medicine,30,0",
+    "2026-04-02,Dr. Sarah Lee,Tan Boey,Crown (PFM),treatment,1200,350",
+  ].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "payroll_import_standard.csv";
+  a.click();
+}
+
+
+function parseDateDMY(raw: string): string {
+  // Convert DD/MM/YYYY → YYYY-MM-DD; fall through for YYYY-MM-DD already
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return raw;
+}
+
+function detectCategory(type: string, category: string): "treatment" | "product" | "medicine" {
+  const cat = category.toLowerCase().trim();
+  const typ = type.toLowerCase().trim();
+  if (cat === "medicine" || cat === "product" || cat === "treatment") return cat as any;
+  if (typ === "medicine" || typ === "product" || typ === "treatment") return typ as any;
+
+  if (cat.includes("medicine") || cat.includes("drug") || cat.includes("pharmacy")) return "medicine";
+  if (cat.includes("product") || typ.includes("product") || typ === "p(r)") return "product";
+  return "treatment";
+}
+
 
 function parseCSV(text: string): PreviewRow[] {
-  const lines = text.trim().split("\n");
+  const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/"/g, ""));
-  return lines.slice(1).map((line) => {
-    const cols = line.split(",").map((c) => c.trim().replace(/"/g, ""));
-    const get = (keys: string[]) => {
-      for (const k of keys) {
-        const i = headers.findIndex((h) => h.includes(k));
-        if (i !== -1) return cols[i] ?? "";
-      }
-      return "";
-    };
-    return {
-      date:      get(["date"]),
-      staff:     get(["staff", "doctor", "dentist", "employee"]),
-      treatment: get(["treatment", "service", "procedure"]),
-      fee:       parseFloat(get(["fee", "amount", "price", "total"])) || 0,
-      patient:   get(["patient", "name", "customer"]),
-    };
-  }).filter((r) => r.date && r.fee > 0);
+
+  // Parse header — handle quoted cells
+  const parseRow = (line: string) => {
+    const result: string[] = [];
+    let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === "," && !inQ) { result.push(cur.trim()); cur = ""; }
+      else { cur += ch; }
+    }
+    result.push(cur.trim());
+    return result;
+  };
+
+  const rawHeaders = parseRow(lines[0]);
+  const headers = rawHeaders.map((h) => h.toLowerCase().replace(/"/g, "").trim());
+
+  const col = (keys: string[]) => {
+    for (const k of keys) {
+      const i = headers.findIndex((h) => h === k || h.includes(k));
+      if (i !== -1) return i;
+    }
+    return -1;
+  };
+
+  // Detect format: payment_allocation_report vs generic POS
+  const isAllocationReport = headers.some((h) => h.includes("employee allocation") || h.includes("allocation (myr)"));
+
+  const iDate       = col(["date"]);
+  const iStaff      = isAllocationReport ? col(["employee allocation"]) : col(["staff", "doctor", "dentist", "employee"]);
+  const iPatient    = col(["customer", "patient", "name"]);
+  const iItem       = col(["item", "treatment", "service", "procedure"]);
+  const iFee        = isAllocationReport ? col(["allocation (myr)"]) : col(["fee", "amount", "price", "total"]);
+  const iLabCost    = col(["labcost", "lab_cost", "lab cost"]);
+  const iType       = col(["type"]);
+  const iCategory   = col(["category"]);
+
+  const iStatus     = col(["status"]);
+
+  return lines.slice(1).flatMap((line) => {
+    if (!line.trim()) return [];
+    const cols = parseRow(line);
+    const get = (i: number) => (i >= 0 ? (cols[i] ?? "").replace(/"/g, "").trim() : "");
+
+    const status = get(iStatus).toLowerCase();
+    // Skip cancelled/voided rows; include fully paid and partial paid
+    if (status && !status.includes("paid")) return [];
+
+    const rawDate = get(iDate);
+    if (!rawDate) return [];
+    const date = parseDateDMY(rawDate);
+
+    const feeRaw = get(iFee).replace(/,/g, "");
+    const fee = parseFloat(feeRaw) || 0;
+    if (fee <= 0) return [];
+
+    const saleCategory = detectCategory(get(iType), get(iCategory));
+    const labCost = parseFloat(get(iLabCost).replace(/,/g, "")) || 0;
+
+    return [{
+      date,
+      staff:       get(iStaff),
+      patient:     get(iPatient),
+      treatment:   get(iItem),
+      fee,
+      labCost,
+      saleCategory,
+    }];
+  });
 }
+
 
 export default function ImportPage() {
   const [branches, setBranches]         = useState<Branch[]>([]);
@@ -47,6 +141,11 @@ export default function ImportPage() {
   const [filename, setFilename]         = useState("");
   const [previewRows, setPreviewRows]   = useState<PreviewRow[]>([]);
   const [history, setHistory]           = useState<HistoryEntry[]>([]);
+  const [month, setMonth]               = useState("2026-04");
+  const [replaceMode, setReplaceMode]   = useState(true);
+  const [clearing, setClearing]         = useState(false);
+  const [skippedItems, setSkippedItems] = useState<string[]>([]);
+  const monthLabel = MONTHS.find(m => m.value === month)?.label ?? month;
 
   useEffect(() => {
     fetchBranches().then((b) => {
@@ -60,7 +159,7 @@ export default function ImportPage() {
     const text = await file.text();
     const rows = parseCSV(text);
     setPreviewRows(rows.length > 0 ? rows : [
-      { date: `${MONTH}-13`, staff: "Staff Name", treatment: "Treatment", fee: 0, patient: "Patient" },
+      { date: `${month}-13`, staff: "Staff Name", treatment: "Treatment", fee: 0, patient: "Patient" },
     ]);
     setStep("preview");
   }
@@ -84,26 +183,49 @@ export default function ImportPage() {
       setSaving(true);
       setError(null);
 
+      if (replaceMode) {
+        await deleteTreatmentRecordsByBranchMonth(selectedBranch, month);
+      }
+
       const [tTypes, staffList] = await Promise.all([fetchTreatmentTypes(), fetchStaff()]);
 
-      const records = previewRows.map((r) => {
+      const skipped: string[] = [];
+      const records = previewRows.flatMap((r) => {
         const matchedStaff = staffList.find((s) =>
           s.name.toLowerCase().includes(r.staff.toLowerCase().split(" ")[0]?.toLowerCase() ?? "")
         );
-        const matchedType = tTypes.find((t) =>
-          t.name.toLowerCase().includes(r.treatment.toLowerCase().split(" ")[0]?.toLowerCase() ?? "")
-        );
-        return {
-          date:            r.date || `${MONTH}-01`,
+        const itemLower = r.treatment.toLowerCase().trim();
+        // Sort longest name first so more specific matches win
+        const sorted = [...tTypes].sort((a, b) => b.name.length - a.name.length);
+        const matchedType =
+          // 1. Exact match
+          sorted.find((t) => t.name.toLowerCase() === itemLower) ??
+          // 2. CSV item contains the full treatment type name (eg. "IN OFFICE WHITENING..." contains "WHITENING")
+          sorted.find((t) => itemLower.includes(t.name.toLowerCase())) ??
+          // 3. Treatment type name contains the full CSV item
+          sorted.find((t) => t.name.toLowerCase().includes(itemLower));
+
+        if (!matchedType) {
+          skipped.push(r.treatment);
+          return [];
+        }
+        if (!matchedStaff) {
+          skipped.push(`${r.staff} (staff not found)`);
+          return [];
+        }
+        return [{
+          date:            r.date || `${month}-01`,
           patientName:     r.patient || "Unknown",
-          staffId:         matchedStaff?.id ?? staffList[0]?.id ?? "",
+          staffId:         matchedStaff.id,
           branchId:        selectedBranch,
-          treatmentTypeId: matchedType?.id ?? tTypes[0]?.id ?? "",
+          treatmentTypeId: matchedType.id,
           fee:             r.fee,
-          labCost:         undefined as number | undefined,
-          saleCategory:    (matchedType?.saleCategory ?? "treatment") as "treatment" | "product" | "medicine",
-        };
-      }).filter((r) => r.staffId && r.treatmentTypeId);
+          labCost:         r.labCost,
+          saleCategory:    (matchedType.saleCategory ?? r.saleCategory ?? "treatment") as "treatment" | "product" | "medicine",
+        }];
+      });
+
+
 
       if (records.length > 0) {
         await insertTreatmentRecords(records);
@@ -113,13 +235,14 @@ export default function ImportPage() {
         id:          "imp" + Date.now(),
         branchId:    selectedBranch,
         branchName:  branch.name,
-        month:       MONTH,
+        month:       month,
         importedAt:  new Date().toLocaleString("en-MY"),
         recordCount: records.length,
         totalAmount: previewRows.reduce((s, r) => s + r.fee, 0),
         filename,
       };
       setHistory((prev) => [entry, ...prev]);
+      setSkippedItems(skipped);
       setStep("done");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Import failed");
@@ -132,10 +255,31 @@ export default function ImportPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-24 lg:pb-8">
-      <div className="fade-up">
-        <p className="text-[#7B91BC] text-xs font-mono uppercase tracking-widest mb-1">Data</p>
-        <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">POS Import</h1>
-        <p className="text-[#7B91BC] text-sm mt-1">Upload your POS export (CSV) per branch per month.</p>
+      <div className="fade-up flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-[#7B91BC] text-xs font-mono uppercase tracking-widest mb-1">Data</p>
+          <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">POS Import</h1>
+          <p className="text-[#7B91BC] text-sm mt-1">Upload your POS export (CSV) per branch per month.</p>
+        </div>
+        <div className="flex gap-3 flex-wrap items-center">
+          <select className="inp w-auto text-sm" value={month} onChange={(e) => { setMonth(e.target.value); setStep("idle"); }}>
+            {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+          <button className="btn btn-ghost text-sm" onClick={downloadTemplate}><Download size={14} /> Template</button>
+          <button
+            className="btn btn-ghost text-sm text-red-400 hover:text-red-300 border-red-500/20 hover:border-red-500/40"
+            disabled={clearing}
+            onClick={async () => {
+              if (!confirm(`Clear ALL records for ${branches.find(b => b.id === selectedBranch)?.name} — ${monthLabel}? This cannot be undone.`)) return;
+              setClearing(true);
+              try { await deleteTreatmentRecordsByBranchMonth(selectedBranch, month); }
+              catch (e: unknown) { setError(e instanceof Error ? e.message : "Clear failed"); }
+              finally { setClearing(false); }
+            }}
+          >
+            <Trash2 size={14} /> {clearing ? "Clearing..." : "Clear Data"}
+          </button>
+        </div>
       </div>
 
       {error && <div className="px-4 py-3 rounded-xl border border-red-500/20 bg-red-500/5 text-sm text-red-400">{error}</div>}
@@ -179,7 +323,7 @@ export default function ImportPage() {
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1A2744] text-[#7B91BC] text-xs">
             <FileSpreadsheet size={12} />
             Branch: <strong className="text-[#E8F0FF]">{branches.find(b => b.id === selectedBranch)?.name}</strong>
-            · Period: <strong className="text-[#E8F0FF]">{MONTH_LABEL}</strong>
+            · Period: <strong className="text-[#E8F0FF]">{monthLabel}</strong>
           </div>
           <input id="file-input" type="file" accept=".csv" className="hidden" onChange={handleFile} />
         </div>
@@ -203,7 +347,7 @@ export default function ImportPage() {
           <div className="overflow-x-auto max-h-72 overflow-y-auto">
             <table className="tbl">
               <thead>
-                <tr><th>Date</th><th>Staff</th><th>Patient</th><th>Treatment</th><th className="text-right">Fee (RM)</th></tr>
+                <tr><th>Date</th><th>Staff</th><th>Patient</th><th>Treatment</th><th>Type</th><th className="text-right">Fee (RM)</th></tr>
               </thead>
               <tbody>
                 {previewRows.slice(0, 10).map((r, i) => (
@@ -212,6 +356,11 @@ export default function ImportPage() {
                     <td className="text-sm text-[#E8F0FF]">{r.staff}</td>
                     <td className="text-xs text-[#7B91BC]">{r.patient}</td>
                     <td className="text-sm text-[#7B91BC]">{r.treatment}</td>
+                    <td>
+                      {r.saleCategory === "medicine" && <span className="badge" style={{ background: "rgba(16,185,129,0.1)", color: "#34D399", border: "1px solid rgba(16,185,129,0.2)" }}>Medicine</span>}
+                      {r.saleCategory === "product"  && <span className="badge" style={{ background: "rgba(251,191,36,0.1)", color: "#FBB724", border: "1px solid rgba(251,191,36,0.2)" }}>Product</span>}
+                      {(!r.saleCategory || r.saleCategory === "treatment") && <span className="badge badge-basic">Treatment</span>}
+                    </td>
                     <td className="text-right font-mono text-sm text-[#E8F0FF]">{r.fee.toFixed(2)}</td>
                   </tr>
                 ))}
@@ -221,16 +370,27 @@ export default function ImportPage() {
               </tbody>
             </table>
           </div>
-          <div className="px-5 py-4 border-t border-[#1E2D4A] flex items-center justify-between gap-4">
+          <div className="px-5 py-4 border-t border-[#1E2D4A] space-y-3">
             <div className="flex items-start gap-2 text-xs text-amber-400">
               <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
               <span>Lab case costs are not in POS exports. Enter them manually in Payroll Processing.</span>
             </div>
-            <div className="flex gap-3">
-              <button className="btn btn-ghost" onClick={() => setStep("idle")}>Cancel</button>
-              <button className="btn btn-primary" onClick={confirmImport} disabled={saving}>
-                <CheckCircle2 size={14} /> {saving ? "Importing..." : "Confirm Import"}
-              </button>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={replaceMode}
+                  onChange={(e) => setReplaceMode(e.target.checked)}
+                  className="w-4 h-4 rounded accent-red-500"
+                />
+                <span className="text-xs text-red-400">Replace existing records for this branch &amp; month</span>
+              </label>
+              <div className="flex gap-3">
+                <button className="btn btn-ghost" onClick={() => setStep("idle")}>Cancel</button>
+                <button className="btn btn-primary" onClick={confirmImport} disabled={saving}>
+                  <CheckCircle2 size={14} /> {saving ? (replaceMode ? "Replacing..." : "Importing...") : (replaceMode ? "Replace & Import" : "Confirm Import")}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -238,15 +398,34 @@ export default function ImportPage() {
 
       {/* Done */}
       {step === "done" && (
-        <div className="fade-up delay-2 flex flex-col items-center gap-4 py-10 rounded-2xl border border-emerald-500/20 bg-emerald-500/5">
-          <CheckCircle2 size={40} className="text-emerald-400" />
-          <div className="text-center">
-            <p className="text-[#E8F0FF] font-semibold">Import Successful</p>
-            <p className="text-[#7B91BC] text-sm mt-1">
-              {history[0]?.recordCount ?? 0} records imported for {branches.find(b => b.id === selectedBranch)?.name}
-            </p>
+        <div className="fade-up delay-2 space-y-3">
+          <div className="flex flex-col items-center gap-4 py-8 rounded-2xl border border-emerald-500/20 bg-emerald-500/5">
+            <CheckCircle2 size={40} className="text-emerald-400" />
+            <div className="text-center">
+              <p className="text-[#E8F0FF] font-semibold">Import Successful</p>
+              <p className="text-[#7B91BC] text-sm mt-1">
+                {history[0]?.recordCount ?? 0} records imported for {branches.find(b => b.id === selectedBranch)?.name}
+              </p>
+              {skippedItems.length > 0 && (
+                <p className="text-amber-400 text-xs mt-1">{skippedItems.length} rows skipped — no matching treatment type</p>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <button className="btn btn-ghost" onClick={() => setStep("idle")}>Import Another File</button>
+              <a href="/review" className="btn btn-primary"><ArrowRight size={14} /> Review Records</a>
+            </div>
           </div>
-          <button className="btn btn-ghost" onClick={() => setStep("idle")}>Import Another File</button>
+          {skippedItems.length > 0 && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+              <p className="text-xs font-semibold text-amber-400 mb-2">Skipped items (not in Treatments Setup):</p>
+              <div className="flex flex-wrap gap-2">
+                {[...new Set(skippedItems)].map((item, i) => (
+                  <span key={i} className="text-[11px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">{item}</span>
+                ))}
+              </div>
+              <p className="text-[11px] text-amber-400/70 mt-2">Add these to <a href="/settings/treatments" className="underline">Treatments Setup</a>, then re-import.</p>
+            </div>
+          )}
         </div>
       )}
 

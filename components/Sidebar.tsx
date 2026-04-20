@@ -12,15 +12,17 @@ import {
   FileText,
   Stethoscope,
   ChevronRight,
+  ClipboardCheck,
 } from "lucide-react";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/staff", label: "Staff", icon: Users },
+  { href: "/import", label: "POS Import", icon: Upload },
+  { href: "/review", label: "Review & Annotate", icon: ClipboardCheck },
   { href: "/payroll", label: "Payroll", icon: Calculator },
   { href: "/payroll/slips", label: "Payroll Slips", icon: FileText },
   { href: "/attendance", label: "Attendance & OT", icon: Clock },
-  { href: "/import", label: "POS Import", icon: Upload },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/settings/treatments", label: "Treatments Setup", icon: Settings2 },
 ];

@@ -12,7 +12,7 @@ const MONTHS = [
   { label: "March 2026", value: "2026-03" },
 ];
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
-const OT_ELIGIBLE = ["fulltime_da", "parttime_da"];
+const OT_ELIGIBLE = ["fulltime_da", "fulltime_dsa_monthly", "parttime_da"];
 
 type CsvRow = { date: string; clockIn: string; clockOut: string; otHours: number; outlet: string };
 
@@ -194,7 +194,7 @@ export default function AttendancePage() {
         <div>
           <p className="text-[#7B91BC] text-xs font-mono uppercase tracking-widest mb-1">HR</p>
           <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">Attendance & OT</h1>
-          <p className="text-[#7B91BC] text-sm mt-1">{monthLabel} · Dental Assistants · RM12/hr OT</p>
+          <p className="text-[#7B91BC] text-sm mt-1">{monthLabel} · Dental Surgery Assistants · RM12/hr OT</p>
         </div>
         <div className="flex gap-3 flex-wrap">
           <select className="inp w-auto" value={month} onChange={(e) => { setMonth(e.target.value); setImportStep("idle"); }}>
@@ -344,7 +344,7 @@ export default function AttendancePage() {
                   <tr key={r.id}>
                     <td>
                       <p className="text-sm font-medium text-[#E8F0FF]">{s?.name ?? "—"}</p>
-                      <p className="text-xs text-[#7B91BC]">{s?.role === "parttime_da" ? "PT DA" : "FT DA"}</p>
+                      <p className="text-xs text-[#7B91BC]">{s?.role === "parttime_da" ? "PT DSA" : "FT DSA"}</p>
                     </td>
                     <td>
                       {b && <div className="flex items-center gap-2">

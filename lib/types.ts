@@ -2,14 +2,16 @@ export type Role =
   | "resident_dentist"
   | "locum_dentist"
   | "fulltime_da"
+  | "fulltime_dsa_monthly"
   | "parttime_da"
   | "supervisor";
 
 export const ROLE_LABELS: Record<Role, string> = {
   resident_dentist: "Resident Dentist",
   locum_dentist: "Locum Dentist",
-  fulltime_da: "Full-time DA",
-  parttime_da: "Part-time DA",
+  fulltime_da: "Full-time DSA",
+  fulltime_dsa_monthly: "Full Time DSA (Monthly)",
+  parttime_da: "Part-time DSA",
   supervisor: "Supervisor",
 };
 
@@ -35,6 +37,7 @@ export type Staff = {
   socsoNumber: string;
   isActive: boolean;
   joinDate: string;
+  performanceAllowanceCap?: number;
 };
 
 export type SaleCategory = "treatment" | "product" | "medicine";
@@ -45,6 +48,8 @@ export type TreatmentType = {
   defaultFee: number;
   materialCost: number;
   isLabCase: boolean;
+  variableMaterialCost: boolean;
+  isOnHold: boolean;
   saleCategory: SaleCategory;
 };
 
@@ -57,6 +62,9 @@ export type TreatmentRecord = {
   treatmentTypeId: string;
   fee: number;
   labCost?: number;
+  materialCostOverride?: number;
+  isOnHold?: boolean;
+  releaseMonth?: string;
   saleCategory: SaleCategory;
 };
 
@@ -82,6 +90,7 @@ export type PayrollEntry = {
   otPay: number;
   earlyLeaveHours: number;
   earlyLeavePenalty: number;
+  performanceAllowance: number;
   grossPay: number;
   epfEmployee: number;
   epfEmployer: number;
@@ -93,6 +102,7 @@ export type PayrollEntry = {
   netPay: number;
   status: "draft" | "finalised";
   commissionBreakdown: CommissionLine[];
+  onHoldBreakdown: { treatmentName: string; totalFee: number }[];
 };
 
 export type CommissionLine = {
@@ -105,7 +115,9 @@ export type CommissionLine = {
   netBase: number;
   rate: number;
   commission: number;
+  saleCategory: SaleCategory;
 };
+
 
 export type ImportRecord = {
   id: string;

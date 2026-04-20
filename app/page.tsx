@@ -78,7 +78,7 @@ export default function DashboardPage() {
 
   const ROLE_SHORT: Record<string, string> = {
     resident_dentist: "Resident Dr.", locum_dentist: "Locum Dr.",
-    fulltime_da: "DA (FT)", parttime_da: "DA (PT)", supervisor: "Supervisor",
+    fulltime_da: "DSA (FT)", fulltime_dsa_monthly: "DSA (Monthly)", parttime_da: "DSA (PT)", supervisor: "Supervisor",
   };
 
   return (

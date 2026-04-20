@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { Branch, Staff, Role, ROLE_LABELS } from "@/lib/types";
 import { fetchBranches, fetchStaff, upsertStaff, setStaffActive } from "@/lib/db";
 import { rm } from "@/lib/calculations";
-import { Search, Plus, Pencil, X } from "lucide-react";
+import { Search, Plus, Pencil, X, UserX, UserCheck, EyeOff, Eye } from "lucide-react";
 import Loading from "@/components/Loading";
 
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
-const ROLES: Role[] = ["resident_dentist", "locum_dentist", "fulltime_da", "parttime_da", "supervisor"];
+const ROLES: Role[] = ["resident_dentist", "locum_dentist", "fulltime_da", "fulltime_dsa_monthly", "parttime_da", "supervisor"];
 const isDentist = (r?: string) => r === "resident_dentist" || r === "locum_dentist";
 
 type ModalStaff = Partial<Staff>;
@@ -22,6 +22,8 @@ export default function StaffPage() {
   const [filterBranch, setFilterBranch] = useState("all");
   const [filterRole, setFilterRole] = useState("all");
   const [modal, setModal] = useState<{ open: boolean; data: ModalStaff }>({ open: false, data: {} });
+  const [showInactive, setShowInactive] = useState(false);
+  const [confirmResign, setConfirmResign] = useState<Staff | null>(null);
 
   useEffect(() => { load(); }, []);
 
@@ -40,6 +42,7 @@ export default function StaffPage() {
   const filtered = staffList.filter((s) => {
     const q = search.toLowerCase();
     return (
+      (showInactive || s.isActive) &&
       (!q || s.name.toLowerCase().includes(q) || s.icNumber?.includes(q)) &&
       (filterBranch === "all" || s.branchId === filterBranch) &&
       (filterRole === "all" || s.role === filterRole)
@@ -58,6 +61,12 @@ export default function StaffPage() {
       await setStaffActive(s.id, !s.isActive);
       setStaffList((prev) => prev.map((x) => x.id === s.id ? { ...x, isActive: !x.isActive } : x));
     } catch { setError("Failed to update staff status"); }
+  }
+
+  async function handleResignConfirm() {
+    if (!confirmResign) return;
+    await handleToggleActive(confirmResign);
+    setConfirmResign(null);
   }
 
   async function saveModal() {
@@ -89,7 +98,13 @@ export default function StaffPage() {
           <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">Staff</h1>
           <p className="text-[#7B91BC] text-sm mt-1">{staffList.filter((s) => s.isActive).length} active · {staffList.length} total</p>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}><Plus size={15} /> Add Staff</button>
+        <div className="flex gap-3 flex-wrap">
+          <button className="btn btn-ghost text-sm" onClick={() => setShowInactive((v) => !v)}>
+            {showInactive ? <EyeOff size={14} /> : <Eye size={14} />}
+            {showInactive ? "Hide Resigned" : "Show Resigned"}
+          </button>
+          <button className="btn btn-primary" onClick={openAdd}><Plus size={15} /> Add Staff</button>
+        </div>
       </div>
 
       {error && <div className="px-4 py-3 rounded-xl border border-red-500/20 bg-red-500/5 text-sm text-red-400">{error}</div>}
@@ -124,7 +139,7 @@ export default function StaffPage() {
                 else if (s.role === "parttime_da") pay = `${rm(s.hourlyRate ?? 0)}/hr`;
                 else pay = `Basic ${rm(s.basicSalary ?? 0)}/mo`;
                 return (
-                  <tr key={s.id}>
+                  <tr key={s.id} className={!s.isActive ? "opacity-50" : ""}>
                     <td>
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-[#1A2744] flex items-center justify-center text-xs font-bold text-teal-400 flex-shrink-0">
@@ -151,17 +166,32 @@ export default function StaffPage() {
                     </td>
                     <td><span className="font-mono text-xs text-[#7B91BC]">{s.icNumber}</span></td>
                     <td>
-                      <button onClick={() => handleToggleActive(s)}>
-                        <span className={`badge ${s.isActive ? "badge-active" : "badge-inactive"}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${s.isActive ? "bg-teal-400" : "bg-slate-500"}`} />
-                          {s.isActive ? "Active" : "Inactive"}
-                        </span>
-                      </button>
+                      <span className={`badge ${s.isActive ? "badge-active" : "badge-inactive"}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${s.isActive ? "bg-teal-400" : "bg-slate-500"}`} />
+                        {s.isActive ? "Active" : "Resigned"}
+                      </span>
                     </td>
                     <td>
-                      <button className="btn btn-ghost py-1.5 px-3 text-xs" onClick={() => openEdit(s)}>
-                        <Pencil size={12} /> Edit
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button className="btn btn-ghost py-1.5 px-3 text-xs" onClick={() => openEdit(s)}>
+                          <Pencil size={12} /> Edit
+                        </button>
+                        {s.isActive ? (
+                          <button
+                            className="btn py-1.5 px-3 text-xs border border-red-500/30 text-red-400 hover:bg-red-500/10 rounded-xl flex items-center gap-1"
+                            onClick={() => setConfirmResign(s)}
+                          >
+                            <UserX size={12} /> Resign
+                          </button>
+                        ) : (
+                          <button
+                            className="btn py-1.5 px-3 text-xs border border-teal-500/30 text-teal-400 hover:bg-teal-500/10 rounded-xl flex items-center gap-1"
+                            onClick={() => handleToggleActive(s)}
+                          >
+                            <UserCheck size={12} /> Reactivate
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -174,7 +204,36 @@ export default function StaffPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Resign Confirmation Dialog */}
+      {confirmResign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmResign(null)} />
+          <div className="relative bg-[#0D1526] border border-red-500/30 rounded-2xl w-full max-w-sm shadow-2xl p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0">
+                <UserX size={18} className="text-red-400" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-[#E8F0FF]">Mark as Resigned?</h3>
+                <p className="text-xs text-[#7B91BC] mt-0.5">{confirmResign.name}</p>
+              </div>
+            </div>
+            <p className="text-sm text-[#7B91BC]">
+              This staff member will be marked as <span className="text-red-400 font-semibold">Resigned</span> and excluded from all future payroll calculations.
+            </p>
+            <div className="flex gap-3 pt-1">
+              <button className="btn btn-ghost flex-1" onClick={() => setConfirmResign(null)}>Cancel</button>
+              <button
+                className="flex-1 py-2 px-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm font-semibold hover:bg-red-500/20 transition-colors"
+                onClick={handleResignConfirm}
+              >
+                Confirm Resign
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {modal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeModal} />
@@ -203,7 +262,7 @@ export default function StaffPage() {
                   <p className="text-[10px] text-[#7B91BC] mt-1">For payslip header only. Commission counts treatments from all branches.</p>
                 </div>
               </div>
-              {(modal.data.role === "resident_dentist" || modal.data.role === "fulltime_da" || modal.data.role === "supervisor") && (
+              {(modal.data.role === "resident_dentist" || modal.data.role === "fulltime_da" || modal.data.role === "fulltime_dsa_monthly" || modal.data.role === "supervisor") && (
                 <div>
                   <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Monthly Basic Salary (RM)</label>
                   <input className="inp" type="number" placeholder="e.g. 4500" value={modal.data.basicSalary ?? ""} onChange={(e) => set("basicSalary", parseFloat(e.target.value))} />
@@ -252,6 +311,11 @@ export default function StaffPage() {
               <div>
                 <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Join Date</label>
                 <input className="inp" type="date" value={modal.data.joinDate ?? ""} onChange={(e) => set("joinDate", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Performance Allowance Cap (RM)</label>
+                <input className="inp" type="number" min="0" placeholder="e.g. 300 — leave 0 if not eligible" value={modal.data.performanceAllowanceCap ?? 0} onChange={(e) => set("performanceAllowanceCap", parseFloat(e.target.value) || 0)} />
+                <p className="text-[10px] text-[#7B91BC] mt-1">Maximum allowance payable per month. Actual amount is entered in Payroll each month.</p>
               </div>
             </div>
             <div className="px-6 py-4 border-t border-[#1E2D4A] flex justify-end gap-3">

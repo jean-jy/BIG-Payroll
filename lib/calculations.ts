@@ -36,14 +36,21 @@ export function calcCommissionLine(
   treatmentType: TreatmentType,
   commissionRate: number
 ): CommissionLine {
-  const isSale = record.saleCategory === "product" || record.saleCategory === "medicine";
-  const materialCost = isSale ? 0 : treatmentType.materialCost;
+  const effectiveCategory = treatmentType.saleCategory || record.saleCategory || "treatment";
+  const isMedicine = effectiveCategory === "medicine";
+  const isProduct  = effectiveCategory === "product";
+
+  // Medicine: 50% of fee is cost, then doctor's commission % on the net
+  // Product: no cost deduction, flat 10%
+  // Treatment: fixed/variable material cost + lab cost, then doctor's commission %
+  const materialCost = isMedicine ? record.fee * 0.5
+    : isProduct ? 0
+    : treatmentType.variableMaterialCost ? (record.materialCostOverride ?? 0)
+    : treatmentType.materialCost;
   const labCost = record.labCost ?? 0;
   const netBase = Math.max(0, record.fee - materialCost - labCost);
-  const rate =
-    record.saleCategory === "medicine" ? 0.5
-    : record.saleCategory === "product" ? 0.1
-    : commissionRate;
+  const rate = isProduct ? 0.1 : commissionRate;
+
   const commission = netBase * rate;
 
   return {
@@ -56,8 +63,10 @@ export function calcCommissionLine(
     netBase,
     rate,
     commission,
+    saleCategory: effectiveCategory as any,
   };
 }
+
 
 function calcStatutory(grossPay: number) {
   const epfBase = grossPay;
@@ -79,14 +88,15 @@ export function calcPayroll(
   month: string,
   records: TreatmentRecord[],
   attendance: AttendanceRecord[],
-  treatmentTypes: TreatmentType[]
+  treatmentTypes: TreatmentType[],
+  performanceAllowance = 0
 ): PayrollEntry {
   const ttMap = Object.fromEntries(treatmentTypes.map((t) => [t.id, t]));
   const myRecords = records.filter((r) => r.staffId === s.id && r.date.startsWith(month));
   const myAttendance = attendance.filter((a) => a.staffId === s.id && a.date.startsWith(month));
 
   // OT & early leave — only for DAs
-  const isDA = s.role === "fulltime_da" || s.role === "parttime_da";
+  const isDA = s.role === "fulltime_da" || s.role === "fulltime_dsa_monthly" || s.role === "parttime_da";
   const otHours = isDA
     ? myAttendance.reduce((sum, a) => sum + (a.otOverride ?? a.otHours), 0)
     : 0;
@@ -95,7 +105,7 @@ export function calcPayroll(
   // Hourly rate for deduction: PT DA uses hourlyRate; FT DA = (basic / 26 days) / 7.5 hrs
   const daHourlyRate =
     s.role === "parttime_da" ? (s.hourlyRate ?? 0)
-    : (s.basicSalary ?? 0) / 26 / 7.5;
+    : (s.basicSalary ?? 0) / 26 / 7.5; // fulltime_da & fulltime_dsa_monthly
 
   const earlyLeaveHours = isDA
     ? myAttendance.reduce((sum, a) => sum + calcEarlyLeaveHours(a.clockOut), 0)
@@ -108,9 +118,20 @@ export function calcPayroll(
   let payBasis: PayrollEntry["payBasis"] = "basic";
   const commissionBreakdown: CommissionLine[] = [];
 
+  const onHoldRecords = myRecords.filter((r) => r.isOnHold || ttMap[r.treatmentTypeId]?.isOnHold);
+  const eligibleRecords = myRecords.filter((r) => !r.isOnHold && !ttMap[r.treatmentTypeId]?.isOnHold);
+
+  // Build on-hold breakdown grouped by treatment name
+  const onHoldMap: Record<string, number> = {};
+  for (const r of onHoldRecords) {
+    const name = ttMap[r.treatmentTypeId]?.name ?? "Unknown";
+    onHoldMap[name] = (onHoldMap[name] ?? 0) + r.fee;
+  }
+  const onHoldBreakdown = Object.entries(onHoldMap).map(([treatmentName, totalFee]) => ({ treatmentName, totalFee }));
+
   if (s.role === "resident_dentist") {
     basicOrDailyOrHourly = s.basicSalary ?? 0;
-    const lines = myRecords.map((r) =>
+    const lines = eligibleRecords.map((r) =>
       calcCommissionLine(r, ttMap[r.treatmentTypeId], s.commissionRate ?? 0)
     );
     commissionBreakdown.push(...lines);
@@ -124,9 +145,9 @@ export function calcPayroll(
     }
   } else if (s.role === "locum_dentist") {
     // Group by date, compare per day
-    const days = Array.from(new Set(myRecords.map((r) => r.date)));
+    const days = Array.from(new Set(eligibleRecords.map((r) => r.date)));
     for (const day of days) {
-      const dayRecords = myRecords.filter((r) => r.date === day);
+      const dayRecords = eligibleRecords.filter((r) => r.date === day);
       const lines = dayRecords.map((r) =>
         calcCommissionLine(r, ttMap[r.treatmentTypeId], s.commissionRate ?? 0)
       );
@@ -154,8 +175,11 @@ export function calcPayroll(
     payBasis = "basic";
   }
 
-  const grossPay = Math.max(0, finalPay + otPay - earlyLeavePenalty);
-  const stat = calcStatutory(grossPay);
+  const grossPay = Math.max(0, finalPay + otPay - earlyLeavePenalty + performanceAllowance);
+  const noStatutory = s.role === "fulltime_dsa_monthly" || s.role === "resident_dentist" || s.role === "locum_dentist";
+  const stat = noStatutory
+    ? { epfEmployee: 0, epfEmployer: 0, socsoEmployee: 0, socsoEmployer: 0, eisEmployee: 0, eisEmployer: 0 }
+    : calcStatutory(grossPay);
   const totalDeductions = stat.epfEmployee + stat.socsoEmployee + stat.eisEmployee;
   const netPay = grossPay - totalDeductions;
 
@@ -170,12 +194,14 @@ export function calcPayroll(
     otPay,
     earlyLeaveHours,
     earlyLeavePenalty,
+    performanceAllowance,
     grossPay,
     ...stat,
     totalDeductions,
     netPay,
     status: "draft",
     commissionBreakdown,
+    onHoldBreakdown,
   };
 }
 

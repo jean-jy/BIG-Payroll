@@ -1,41 +1,57 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Branch, Staff, TreatmentRecord, AttendanceRecord, TreatmentType } from "@/lib/types";
-import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes, fetchPayrollStatuses, finalisePayroll, finaliseAllPayroll } from "@/lib/db";
+import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes, fetchPayrollStatuses, finalisePayroll, finaliseAllPayroll, fetchPerformanceAllowances, upsertPerformanceAllowance, PerformanceAllowanceMap, updateMaterialCostOverride, updateLabCost, updateRecordOnHold } from "@/lib/db";
 import { calcPayroll, rm } from "@/lib/calculations";
-import { ChevronDown, ChevronRight, CheckCircle2, Lock, AlertCircle, ArrowUp } from "lucide-react";
+import { ChevronDown, ChevronRight, CheckCircle2, Lock, AlertCircle, ArrowUp, PauseCircle, PlayCircle } from "lucide-react";
 import Loading from "@/components/Loading";
 
-const MONTH = "2026-04";
+const MONTHS = [
+  { label: "April 2026",    value: "2026-04" },
+  { label: "March 2026",   value: "2026-03" },
+  { label: "February 2026", value: "2026-02" },
+  { label: "January 2026",  value: "2026-01" },
+  { label: "December 2025", value: "2025-12" },
+  { label: "November 2025", value: "2025-11" },
+];
+
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 const ROLE_SHORT: Record<string, string> = {
   resident_dentist: "Resident Dr.", locum_dentist: "Locum Dr.",
-  fulltime_da: "DA (FT)", parttime_da: "DA (PT)", supervisor: "Supervisor",
+  fulltime_da: "DSA (FT)", fulltime_dsa_monthly: "DSA (Monthly)", parttime_da: "DSA (PT)", supervisor: "Supervisor",
 };
 
 export default function PayrollPage() {
+  const [month, setMonth]           = useState("2026-04");
   const [branches, setBranches]     = useState<Branch[]>([]);
   const [staff, setStaff]           = useState<Staff[]>([]);
   const [records, setRecords]       = useState<TreatmentRecord[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [tTypes, setTTypes]         = useState<TreatmentType[]>([]);
   const [statuses, setStatuses]     = useState<Record<string, "draft" | "finalised">>({});
+  const [allowances, setAllowances] = useState<PerformanceAllowanceMap>({});
   const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [expanded, setExpanded]     = useState<string | null>(null);
 
-  useEffect(() => { load(); }, []);
+
+  useEffect(() => { load(); }, [month]);
 
   async function load() {
     try {
       setLoading(true);
-      const [b, s, r, a, tt, st] = await Promise.all([
-        fetchBranches(), fetchStaff(), fetchTreatmentRecords(MONTH),
-        fetchAttendanceRecords(MONTH), fetchTreatmentTypes(), fetchPayrollStatuses(MONTH),
+      const [b, s, r, a, tt, st, al] = await Promise.all([
+        fetchBranches(), fetchStaff(), fetchTreatmentRecords(month),
+        fetchAttendanceRecords(month), fetchTreatmentTypes(), fetchPayrollStatuses(month),
+        fetchPerformanceAllowances(month),
       ]);
       setBranches(b); setStaff(s); setRecords(r);
-      setAttendance(a); setTTypes(tt); setStatuses(st);
+      setAttendance(a); setTTypes(tt); setStatuses(st); setAllowances(al);
+      setMatOverrides(Object.fromEntries(r.filter(x => x.materialCostOverride !== undefined).map(x => [x.id, x.materialCostOverride!])));
+      setLabOverrides(Object.fromEntries(r.filter(x => x.labCost !== undefined && x.labCost > 0).map(x => [x.id, x.labCost!])));
+      setHoldOverrides(Object.fromEntries(r.filter(x => x.isOnHold).map(x => [x.id, true])));
+
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
@@ -44,10 +60,43 @@ export default function PayrollPage() {
   }
 
   const activeStaff = staff.filter((s) => s.isActive);
+  const [matOverrides, setMatOverrides] = useState<Record<string, number>>({});
+  const [labOverrides, setLabOverrides] = useState<Record<string, number>>({});
+  const [holdOverrides, setHoldOverrides] = useState<Record<string, boolean>>({});
+
+  const recordsWithOverrides = records.map((r) => ({
+    ...r,
+    ...(matOverrides[r.id] !== undefined ? { materialCostOverride: matOverrides[r.id] } : {}),
+    ...(labOverrides[r.id] !== undefined ? { labCost: labOverrides[r.id] } : {}),
+    ...(holdOverrides[r.id] !== undefined ? { isOnHold: holdOverrides[r.id] } : {}),
+  }));
+
   const payrolls = activeStaff.map((s) => ({
     staff: s,
-    payroll: calcPayroll(s, MONTH, records, attendance, tTypes),
+    payroll: calcPayroll(s, month, recordsWithOverrides, attendance, tTypes, allowances[s.id] ?? 0),
   }));
+
+  async function handleMatCostChange(recordId: string, value: number) {
+    setMatOverrides((prev) => ({ ...prev, [recordId]: value }));
+    await updateMaterialCostOverride(recordId, value);
+  }
+
+  async function handleLabCostChange(recordId: string, value: number) {
+    setLabOverrides((prev) => ({ ...prev, [recordId]: value }));
+    await updateLabCost(recordId, value);
+  }
+
+  async function handleToggleHold(recordId: string, current: boolean) {
+    const next = !current;
+    setHoldOverrides((prev) => ({ ...prev, [recordId]: next }));
+    await updateRecordOnHold(recordId, next, month);
+  }
+
+  async function handleAllowanceChange(staffId: string, value: number) {
+
+    setAllowances((prev) => ({ ...prev, [staffId]: value }));
+    await upsertPerformanceAllowance(staffId, month, value);
+  }
 
   const totalGross = payrolls.reduce((s, p) => s + p.payroll.grossPay, 0);
   const totalNet   = payrolls.reduce((s, p) => s + p.payroll.netPay, 0);
@@ -59,7 +108,7 @@ export default function PayrollPage() {
   async function handleFinalise(staffId: string) {
     try {
       setSaving(true);
-      await finalisePayroll(staffId, MONTH);
+      await finalisePayroll(staffId, month);
       setStatuses((prev) => ({ ...prev, [staffId]: "finalised" }));
     } catch { setError("Failed to finalise"); } finally { setSaving(false); }
   }
@@ -68,7 +117,7 @@ export default function PayrollPage() {
     try {
       setSaving(true);
       const ids = activeStaff.map((s) => s.id);
-      await finaliseAllPayroll(ids, MONTH);
+      await finaliseAllPayroll(ids, month);
       setStatuses(Object.fromEntries(ids.map((id) => [id, "finalised"])));
     } catch { setError("Failed to finalise all"); } finally { setSaving(false); }
   }
@@ -83,10 +132,12 @@ export default function PayrollPage() {
         <div>
           <p className="text-[#7B91BC] text-xs font-mono uppercase tracking-widest mb-1">Payroll</p>
           <h1 className="font-display text-2xl lg:text-3xl font-bold text-[#E8F0FF]">Payroll Processing</h1>
-          <p className="text-[#7B91BC] text-sm mt-1">April 2026 · {activeStaff.length} staff</p>
+          <p className="text-[#7B91BC] text-sm mt-1">{MONTHS.find((m) => m.value === month)?.label} · {activeStaff.length} staff</p>
         </div>
         <div className="flex gap-3 flex-wrap">
-          <select className="inp w-auto text-sm"><option>April 2026</option></select>
+          <select className="inp w-auto text-sm" value={month} onChange={(e) => { setMonth(e.target.value); setExpanded(null); }}>
+            {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
           {allFinalised ? (
             <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-semibold">
               <CheckCircle2 size={14} /> All Finalised
@@ -181,6 +232,12 @@ export default function PayrollPage() {
                         <p className="font-mono text-xs text-red-400">−{rm(p.earlyLeavePenalty)}</p>
                       </div>
                     )}
+                    {p.performanceAllowance > 0 && (
+                      <div className="w-28 text-right">
+                        <p className="text-[10px] text-[#7B91BC] uppercase tracking-wider mb-0.5">Perf. Allow.</p>
+                        <p className="font-mono text-xs text-violet-400">+{rm(p.performanceAllowance)}</p>
+                      </div>
+                    )}
                     <div className="w-28 text-right">
                       <p className="text-[10px] text-[#7B91BC] uppercase tracking-wider mb-0.5">Gross</p>
                       <p className="font-mono text-sm font-bold text-[#E8F0FF]">{rm(p.grossPay)}</p>
@@ -230,7 +287,7 @@ export default function PayrollPage() {
                             <span className="font-mono text-sm font-bold text-[#E8F0FF]">{rm(p.finalPay)}</span>
                           </div>
                         </>)}
-                        {(s.role === "fulltime_da" || s.role === "supervisor") && (
+                        {(s.role === "fulltime_da" || s.role === "fulltime_dsa_monthly" || s.role === "supervisor") && (
                           <div className="flex justify-between py-2 border-b border-[#1E2D4A]/40">
                             <span className="text-sm text-[#7B91BC]">Basic Salary</span>
                             <span className="font-mono text-sm text-[#E8F0FF]">{rm(p.basicOrDailyOrHourly)}</span>
@@ -246,6 +303,34 @@ export default function PayrollPage() {
                           <div className="flex justify-between py-2 border-b border-[#1E2D4A]/40">
                             <span className="text-sm text-[#7B91BC]">OT ({p.otHours.toFixed(1)} hrs × RM12)</span>
                             <span className="font-mono text-sm text-amber-400">+{rm(p.otPay)}</span>
+                          </div>
+                        )}
+                        {p.earlyLeavePenalty > 0 && (
+                          <div className="flex justify-between py-2 border-b border-[#1E2D4A]/40">
+                            <span className="text-sm text-[#7B91BC]">Early Leave ({p.earlyLeaveHours.toFixed(1)} hrs)</span>
+                            <span className="font-mono text-sm text-red-400">−{rm(p.earlyLeavePenalty)}</span>
+                          </div>
+                        )}
+                        {(s.performanceAllowanceCap ?? 0) > 0 && (
+                          <div className="flex justify-between items-center py-2 border-b border-[#1E2D4A]/40">
+                            <div>
+                              <span className="text-sm text-[#7B91BC]">Performance Allowance</span>
+                              <span className="text-[10px] text-[#7B91BC] ml-2">(cap: {rm(s.performanceAllowanceCap ?? 0)})</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-[#7B91BC]">RM</span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={s.performanceAllowanceCap ?? 0}
+                                value={allowances[s.id] ?? 0}
+                                onChange={(e) => {
+                                  const v = Math.min(parseFloat(e.target.value) || 0, s.performanceAllowanceCap ?? 0);
+                                  handleAllowanceChange(s.id, v);
+                                }}
+                                className="w-24 bg-[#1A2744] border border-[#2A3F6A] rounded-lg px-2 py-1 text-sm font-mono text-teal-400 text-right focus:outline-none focus:border-teal-500"
+                              />
+                            </div>
                           </div>
                         )}
                         <div className="flex justify-between py-2 border-b border-[#1E2D4A]/40">
@@ -287,27 +372,118 @@ export default function PayrollPage() {
                         </div>
                       </div>
 
+                      {/* On-hold records */}
+                      {p.onHoldBreakdown.length > 0 && (
+                        <div className="lg:col-span-2">
+                          <h3 className="font-display text-xs font-bold uppercase tracking-widest text-amber-500 mb-3">Payment on Hold ({p.onHoldBreakdown.reduce((s, r) => s + r.totalFee, 0).toFixed(2)} total)</h3>
+                          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 overflow-hidden">
+                            <table className="tbl text-xs">
+                              <thead><tr><th>Treatment</th><th className="text-right">Total Fee</th><th>Action</th></tr></thead>
+                              <tbody>
+                                {p.onHoldBreakdown.map((item, i) => {
+                                  const heldRecs = recordsWithOverrides.filter(r => r.staffId === s.id && (r.isOnHold || tTypes.find(t => t.id === r.treatmentTypeId)?.isOnHold) && (tTypes.find(t => t.id === r.treatmentTypeId)?.name ?? "") === item.treatmentName);
+                                  return (
+                                    <tr key={i}>
+                                      <td className="text-amber-300">{item.treatmentName}</td>
+                                      <td className="text-right font-mono text-amber-400">{rm(item.totalFee)}</td>
+                                      <td>
+                                        {heldRecs.map(rec => (
+                                          <button key={rec.id} onClick={() => handleToggleHold(rec.id, true)}
+                                            className="text-[10px] text-amber-400 hover:text-teal-400 underline mr-2">
+                                            Release {rec.patientName}
+                                          </button>
+                                        ))}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Commission breakdown */}
                       {p.commissionBreakdown.length > 0 && (
                         <div>
-                          <h3 className="font-display text-xs font-bold uppercase tracking-widest text-[#7B91BC] mb-4">Commission ({p.commissionBreakdown.length} items)</h3>
+                          <div className="flex items-center justify-between gap-4 mb-4">
+                            <h3 className="font-display text-xs font-bold uppercase tracking-widest text-[#7B91BC]">Commission ({p.commissionBreakdown.length} items)</h3>
+                            {p.commissionBreakdown.some(l => l.saleCategory !== "treatment") && (
+                              <div className="flex gap-4">
+                                {Object.entries(p.commissionBreakdown.reduce((acc, l) => {
+                                  if (l.saleCategory === "treatment") return acc;
+                                  if (!acc[l.treatmentName]) acc[l.treatmentName] = { count: 0, total: 0, cat: l.saleCategory };
+                                  acc[l.treatmentName].count++;
+                                  acc[l.treatmentName].total += l.fee;
+                                  return acc;
+                                }, {} as Record<string, { count: number; total: number; cat: string } >)).map(([name, stat]) => (
+                                  <div key={name} className="flex flex-col items-end">
+                                    <p className="text-[10px] text-[#7B91BC] uppercase tracking-wider">{name}</p>
+                                    <p className="font-mono text-xs font-bold text-[#E8F0FF]">
+                                      {stat.count} × <span className={stat.cat === "medicine" ? "text-emerald-400" : "text-amber-400"}>{rm(stat.total)}</span>
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                           <div className="rounded-xl border border-[#1E2D4A] overflow-hidden">
-                            <div className="overflow-x-auto max-h-72 overflow-y-auto">
+
+                            <div className="overflow-x-auto max-h-96 overflow-y-auto">
                               <table className="tbl text-xs">
-                                <thead><tr><th>Date</th><th>Treatment</th><th className="text-right">Fee</th><th className="text-right">−Cost</th><th className="text-right">−Lab</th><th className="text-right">Net</th><th className="text-right">%</th><th className="text-right">Comm</th></tr></thead>
+                                <thead><tr><th>Date</th><th>Treatment</th><th className="text-right">Fee</th><th className="text-right">−Cost</th><th className="text-right">−Lab</th><th className="text-right">Net</th><th className="text-right">%</th><th className="text-right">Comm</th><th>Hold</th></tr></thead>
                                 <tbody>
-                                  {p.commissionBreakdown.map((line, i) => (
+                                  {p.commissionBreakdown.map((line, i) => {
+                                    const rec = recordsWithOverrides.find(r => r.date === line.date && r.patientName === line.patientName && r.staffId === s.id);
+                                    const tt = rec ? tTypes.find(t => t.id === rec.treatmentTypeId) : undefined;
+                                    const isVariable = tt?.variableMaterialCost ?? false;
+                                    const isHeld = rec ? (holdOverrides[rec.id] ?? rec.isOnHold ?? false) : false;
+                                    const labVal = rec ? (labOverrides[rec.id] ?? rec.labCost ?? 0) : line.labCost;
+                                    return (
                                     <tr key={i}>
                                       <td className="font-mono text-[#7B91BC]">{line.date.slice(5)}</td>
-                                      <td><div className="text-[#E8F0FF]">{line.treatmentName}</div><div className="text-[#7B91BC] text-[10px]">{line.patientName}</div></td>
+                                      <td>
+                                        <div className="text-[#E8F0FF]">{line.treatmentName}</div>
+                                        <div className="text-[#7B91BC] text-[10px]">{line.patientName}</div>
+                                      </td>
                                       <td className="text-right font-mono">{line.fee}</td>
-                                      <td className="text-right font-mono text-red-400">{line.materialCost > 0 ? `−${line.materialCost}` : "—"}</td>
-                                      <td className="text-right font-mono text-red-400">{line.labCost > 0 ? `−${line.labCost.toFixed(0)}` : "—"}</td>
+                                      <td className="text-right font-mono text-red-400">
+                                        {isVariable && rec ? (
+                                          <input
+                                            type="number" min={0}
+                                            value={matOverrides[rec.id] ?? rec.materialCostOverride ?? 0}
+                                            onChange={(e) => handleMatCostChange(rec.id, parseFloat(e.target.value) || 0)}
+                                            className="w-20 bg-[#1A2744] border border-violet-500/40 rounded px-1.5 py-0.5 text-xs font-mono text-violet-300 text-right focus:outline-none focus:border-violet-400"
+                                          />
+                                        ) : line.materialCost > 0 ? `−${line.materialCost}` : "—"}
+                                      </td>
+                                      <td className="text-right font-mono text-amber-400">
+                                        {rec?.saleCategory === "treatment" ? (
+                                          <input
+                                            type="number" min={0}
+                                            value={labVal}
+                                            onChange={(e) => handleLabCostChange(rec.id, parseFloat(e.target.value) || 0)}
+                                            className="w-20 bg-[#1A2744] border border-amber-500/40 rounded px-1.5 py-0.5 text-xs font-mono text-amber-300 text-right focus:outline-none focus:border-amber-400"
+                                          />
+                                        ) : "—"}
+                                      </td>
                                       <td className="text-right font-mono">{line.netBase.toFixed(0)}</td>
                                       <td className="text-right font-mono text-[#7B91BC]">{(line.rate * 100).toFixed(0)}%</td>
                                       <td className="text-right font-mono font-bold text-teal-400">{line.commission.toFixed(2)}</td>
+                                      <td>
+                                        {rec && (
+                                          <button
+                                            title={isHeld ? "Release hold" : "Put on hold"}
+                                            onClick={() => handleToggleHold(rec.id, isHeld)}
+                                            className={`p-1 rounded transition-colors ${isHeld ? "text-amber-400 hover:text-amber-300" : "text-[#7B91BC] hover:text-amber-400"}`}
+                                          >
+                                            {isHeld ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
+                                          </button>
+                                        )}
+                                      </td>
                                     </tr>
-                                  ))}
+                                    );
+                                  })}
                                 </tbody>
                                 <tfoot>
                                   <tr className="border-t border-[#1E2D4A]">
