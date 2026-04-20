@@ -199,25 +199,25 @@ export const staff: Staff[] = [
 
 export const treatmentTypes: TreatmentType[] = [
   // Treatments
-  { id: "t1",  name: "Scaling & Polishing",    defaultFee: 80,   materialCost: 0,   isLabCase: false, saleCategory: "treatment" },
-  { id: "t2",  name: "Composite Filling",       defaultFee: 150,  materialCost: 30,  isLabCase: false, saleCategory: "treatment" },
-  { id: "t3",  name: "Extraction (Simple)",     defaultFee: 100,  materialCost: 5,   isLabCase: false, saleCategory: "treatment" },
-  { id: "t4",  name: "Surgical Extraction",     defaultFee: 250,  materialCost: 15,  isLabCase: false, saleCategory: "treatment" },
-  { id: "t5",  name: "Root Canal Treatment",    defaultFee: 800,  materialCost: 120, isLabCase: false, saleCategory: "treatment" },
-  { id: "t6",  name: "Porcelain Crown",         defaultFee: 1200, materialCost: 0,   isLabCase: true,  saleCategory: "treatment" },
-  { id: "t7",  name: "Teeth Whitening",         defaultFee: 600,  materialCost: 80,  isLabCase: false, saleCategory: "treatment" },
-  { id: "t8",  name: "Full Denture",            defaultFee: 1500, materialCost: 0,   isLabCase: true,  saleCategory: "treatment" },
-  { id: "t9",  name: "Partial Denture",         defaultFee: 800,  materialCost: 0,   isLabCase: true,  saleCategory: "treatment" },
-  { id: "t10", name: "X-Ray (Periapical)",      defaultFee: 30,   materialCost: 5,   isLabCase: false, saleCategory: "treatment" },
-  { id: "t11", name: "X-Ray (OPG)",             defaultFee: 80,   materialCost: 10,  isLabCase: false, saleCategory: "treatment" },
-  { id: "t12", name: "Braces Consultation",     defaultFee: 50,   materialCost: 0,   isLabCase: false, saleCategory: "treatment" },
+  { id: "t1",  name: "Scaling & Polishing",    defaultFee: 80,   materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t2",  name: "Composite Filling",       defaultFee: 150,  materialCost: 30,  variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t3",  name: "Extraction (Simple)",     defaultFee: 100,  materialCost: 5,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t4",  name: "Surgical Extraction",     defaultFee: 250,  materialCost: 15,  variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t5",  name: "Root Canal Treatment",    defaultFee: 800,  materialCost: 120, variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t6",  name: "Porcelain Crown",         defaultFee: 1200, materialCost: 0,   variableMaterialCost: false, isLabCase: true,  isOnHold: false, saleCategory: "treatment" },
+  { id: "t7",  name: "Teeth Whitening",         defaultFee: 600,  materialCost: 80,  variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t8",  name: "Full Denture",            defaultFee: 1500, materialCost: 0,   variableMaterialCost: false, isLabCase: true,  isOnHold: false, saleCategory: "treatment" },
+  { id: "t9",  name: "Partial Denture",         defaultFee: 800,  materialCost: 0,   variableMaterialCost: false, isLabCase: true,  isOnHold: false, saleCategory: "treatment" },
+  { id: "t10", name: "X-Ray (Periapical)",      defaultFee: 30,   materialCost: 5,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t11", name: "X-Ray (OPG)",             defaultFee: 80,   materialCost: 10,  variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
+  { id: "t12", name: "Braces Consultation",     defaultFee: 50,   materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "treatment" },
   // Products — 10% commission on selling price
-  { id: "t13", name: "Mouthwash",               defaultFee: 0,    materialCost: 0,   isLabCase: false, saleCategory: "product" },
-  { id: "t14", name: "Toothbrush",              defaultFee: 0,    materialCost: 0,   isLabCase: false, saleCategory: "product" },
-  { id: "t15", name: "Flosser",                 defaultFee: 0,    materialCost: 0,   isLabCase: false, saleCategory: "product" },
-  // Medicine — 50% commission on selling price
-  { id: "t16", name: "Antibiotic",              defaultFee: 0,    materialCost: 0,   isLabCase: false, saleCategory: "medicine" },
-  { id: "t17", name: "Painkiller",              defaultFee: 0,    materialCost: 0,   isLabCase: false, saleCategory: "medicine" },
+  { id: "t13", name: "Mouthwash",               defaultFee: 0,    materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "product" },
+  { id: "t14", name: "Toothbrush",              defaultFee: 0,    materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "product" },
+  { id: "t15", name: "Flosser",                 defaultFee: 0,    materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "product" },
+  // Medicine — 50% cost deduction, then doctor's commission rate on net
+  { id: "t16", name: "Antibiotic",              defaultFee: 0,    materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "medicine" },
+  { id: "t17", name: "Painkiller",              defaultFee: 0,    materialCost: 0,   variableMaterialCost: false, isLabCase: false, isOnHold: false, saleCategory: "medicine" },
 ];
 
 export const treatmentRecords: TreatmentRecord[] = [
