@@ -191,9 +191,12 @@ export default function ImportPage() {
 
       const skipped: string[] = [];
       const records = previewRows.flatMap((r) => {
-        const matchedStaff = staffList.find((s) =>
-          s.name.toLowerCase().includes(r.staff.toLowerCase().split(" ")[0]?.toLowerCase() ?? "")
-        );
+        const csvName = r.staff.toLowerCase().trim();
+        const branchStaff = staffList.filter(s => s.branchId === selectedBranch);
+        const matchedStaff =
+          branchStaff.find(s => s.name.toLowerCase() === csvName) ??
+          branchStaff.find(s => s.name.toLowerCase().includes(csvName)) ??
+          branchStaff.find(s => csvName.includes(s.name.toLowerCase()));
         const itemLower = r.treatment.toLowerCase().trim();
         // Sort longest name first so more specific matches win
         const sorted = [...tTypes].sort((a, b) => b.name.length - a.name.length);
