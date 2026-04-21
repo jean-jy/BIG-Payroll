@@ -195,7 +195,11 @@ export default function ReviewPage() {
             const branch = branches.find(b => b.id === s.branchId);
             const open = expanded.has(s.id);
             const staffHeld = recs.filter(r => holdEdits[r.id] ?? r.isOnHold).length;
+            const currentRecs = recs.filter(r => !r.releaseMonth || r.date >= `${month}-01`);
+            const deferredRecs = recs.filter(r => r.releaseMonth && r.date < `${month}-01`);
             const staffTotal = recs.reduce((sum, r) => sum + r.fee, 0);
+            const staffCurrentTotal = currentRecs.reduce((sum, r) => sum + r.fee, 0);
+            const staffDeferredTotal = deferredRecs.reduce((sum, r) => sum + r.fee, 0);
             const staffHeldAmt = recs.filter(r => holdEdits[r.id] ?? r.isOnHold).reduce((sum, r) => sum + r.fee, 0);
             const staffEligible = staffTotal - staffHeldAmt;
             const hasLab = recs.some(r => (labEdits[r.id] ?? r.labCost ?? 0) > 0);
@@ -231,8 +235,11 @@ export default function ReviewPage() {
                   </div>
                   <div className="hidden lg:flex items-center gap-6 text-right">
                     <div>
-                      <p className="text-[10px] text-[#7B91BC] uppercase tracking-wider">Total Collection</p>
-                      <p className="font-mono text-sm font-bold text-[#E8F0FF]">{rm(staffTotal)}</p>
+                      <p className="text-[10px] text-[#7B91BC] uppercase tracking-wider">This Month</p>
+                      <p className="font-mono text-sm font-bold text-[#E8F0FF]">{rm(staffCurrentTotal)}</p>
+                      {staffDeferredTotal > 0 && (
+                        <p className="text-[10px] text-violet-400 mt-0.5">+{rm(staffDeferredTotal)} carried fwd</p>
+                      )}
                     </div>
                     {staffHeld > 0 && (
                       <div>
