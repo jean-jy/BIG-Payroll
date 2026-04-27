@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, Calculator, BarChart3, Stethoscope } from "lucide-react";
+import { LayoutDashboard, Users, Calculator, BarChart3, Stethoscope, CalendarDays } from "lucide-react";
 
 const items = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/staff", label: "Staff", icon: Users },
+  { href: "/schedule", label: "Schedule", icon: CalendarDays },
   { href: "/payroll", label: "Payroll", icon: Calculator },
   { href: "/reports", label: "Reports", icon: BarChart3 },
 ];

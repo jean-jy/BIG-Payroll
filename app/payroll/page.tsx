@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Branch, Staff, TreatmentRecord, AttendanceRecord, TreatmentType } from "@/lib/types";
-import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes, fetchPayrollStatuses, finalisePayroll, finaliseAllPayroll, fetchPerformanceAllowances, upsertPerformanceAllowance, PerformanceAllowanceMap, updateMaterialCostOverride, updateLabCost, updateRecordOnHold } from "@/lib/db";
+import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes, fetchPayrollStatuses, finalisePayroll, finaliseAllPayroll, fetchPerformanceAllowances, upsertPerformanceAllowance, PerformanceAllowanceMap, updateMaterialCostOverride, updateLabCost, updateRecordOnHold, fetchPayrollAdjustments, insertPayrollAdjustment, updatePayrollAdjustment, deletePayrollAdjustment, AdjustmentMap } from "@/lib/db";
+import { PayrollAdjustment } from "@/lib/types";
 import { calcPayroll, rm } from "@/lib/calculations";
-import { ChevronDown, ChevronRight, CheckCircle2, Lock, AlertCircle, ArrowUp, PauseCircle, PlayCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, CheckCircle2, Lock, AlertCircle, ArrowUp, PauseCircle, PlayCircle, Plus, X, Pencil, Check } from "lucide-react";
 import Loading from "@/components/Loading";
 
 const MONTHS = [
@@ -30,6 +31,10 @@ export default function PayrollPage() {
   const [tTypes, setTTypes]         = useState<TreatmentType[]>([]);
   const [statuses, setStatuses]     = useState<Record<string, "draft" | "finalised">>({});
   const [allowances, setAllowances] = useState<PerformanceAllowanceMap>({});
+  const [adjustments, setAdjustments] = useState<AdjustmentMap>({});
+  const [adjForms, setAdjForms] = useState<Record<string, { desc: string; amount: string; type: "add" | "deduct" }>>({});
+  const [editingAdj, setEditingAdj] = useState<string | null>(null);
+  const [editAdjForm, setEditAdjForm] = useState<{ desc: string; amount: string; type: "add" | "deduct" }>({ desc: "", amount: "", type: "add" });
   const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState<string | null>(null);
@@ -41,13 +46,13 @@ export default function PayrollPage() {
   async function load() {
     try {
       setLoading(true);
-      const [b, s, r, a, tt, st, al] = await Promise.all([
+      const [b, s, r, a, tt, st, al, adj] = await Promise.all([
         fetchBranches(), fetchStaff(), fetchTreatmentRecords(month),
         fetchAttendanceRecords(month), fetchTreatmentTypes(), fetchPayrollStatuses(month),
-        fetchPerformanceAllowances(month),
+        fetchPerformanceAllowances(month), fetchPayrollAdjustments(month),
       ]);
       setBranches(b); setStaff(s); setRecords(r);
-      setAttendance(a); setTTypes(tt); setStatuses(st); setAllowances(al);
+      setAttendance(a); setTTypes(tt); setStatuses(st); setAllowances(al); setAdjustments(adj);
       setMatOverrides(Object.fromEntries(r.filter(x => x.materialCostOverride !== undefined).map(x => [x.id, x.materialCostOverride!])));
       setLabOverrides(Object.fromEntries(r.filter(x => x.labCost !== undefined && x.labCost > 0).map(x => [x.id, x.labCost!])));
       setHoldOverrides(Object.fromEntries(r.filter(x => x.isOnHold).map(x => [x.id, true])));
@@ -73,7 +78,7 @@ export default function PayrollPage() {
 
   const payrolls = activeStaff.map((s) => ({
     staff: s,
-    payroll: calcPayroll(s, month, recordsWithOverrides, attendance, tTypes, allowances[s.id] ?? 0),
+    payroll: calcPayroll(s, month, recordsWithOverrides, attendance, tTypes, allowances[s.id] ?? 0, adjustments[s.id] ?? []),
   }));
 
   async function handleMatCostChange(recordId: string, value: number) {
@@ -96,6 +101,41 @@ export default function PayrollPage() {
 
     setAllowances((prev) => ({ ...prev, [staffId]: value }));
     await upsertPerformanceAllowance(staffId, month, value);
+  }
+
+  async function handleAddAdjustment(staffId: string) {
+    const form = adjForms[staffId];
+    const amount = parseFloat(form?.amount ?? "");
+    if (!form?.desc.trim() || !amount || amount <= 0) return;
+    try {
+      setSaving(true);
+      const adj = await insertPayrollAdjustment({ staffId, month, description: form.desc.trim(), amount, type: form.type ?? "add" });
+      setAdjustments((prev) => ({ ...prev, [staffId]: [...(prev[staffId] ?? []), adj] }));
+      setAdjForms((prev) => ({ ...prev, [staffId]: { desc: "", amount: "", type: "add" } }));
+    } catch { setError("Failed to save adjustment"); } finally { setSaving(false); }
+  }
+
+  async function handleDeleteAdjustment(staffId: string, adjId: string) {
+    try {
+      await deletePayrollAdjustment(adjId);
+      setAdjustments((prev) => ({ ...prev, [staffId]: (prev[staffId] ?? []).filter((a) => a.id !== adjId) }));
+    } catch { setError("Failed to delete adjustment"); }
+  }
+
+  async function handleSaveAdjustment(staffId: string, adjId: string) {
+    const amount = parseFloat(editAdjForm.amount);
+    if (!editAdjForm.desc.trim() || !amount || amount <= 0) return;
+    try {
+      setSaving(true);
+      await updatePayrollAdjustment(adjId, { description: editAdjForm.desc.trim(), amount, type: editAdjForm.type });
+      setAdjustments((prev) => ({
+        ...prev,
+        [staffId]: (prev[staffId] ?? []).map((a) =>
+          a.id === adjId ? { ...a, description: editAdjForm.desc.trim(), amount, type: editAdjForm.type } : a
+        ),
+      }));
+      setEditingAdj(null);
+    } catch { setError("Failed to update adjustment"); } finally { setSaving(false); }
   }
 
   const totalGross = payrolls.reduce((s, p) => s + p.payroll.grossPay, 0);
@@ -496,6 +536,129 @@ export default function PayrollPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* Manual Adjustments */}
+                      <div className="lg:col-span-2">
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="font-display text-xs font-bold uppercase tracking-widest text-[#7B91BC]">
+                            Manual Adjustments
+                            {(adjustments[s.id] ?? []).length > 0 && (
+                              <span className="ml-2 text-teal-400">({(adjustments[s.id] ?? []).length})</span>
+                            )}
+                          </h3>
+                          {p.adjustmentNet !== 0 && (
+                            <span className={`font-mono text-sm font-bold ${p.adjustmentNet > 0 ? "text-teal-400" : "text-red-400"}`}>
+                              Net: {p.adjustmentNet > 0 ? "+" : ""}{rm(p.adjustmentNet)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="rounded-xl border border-[#1E2D4A] overflow-hidden">
+                          {(adjustments[s.id] ?? []).length > 0 && (
+                            <table className="tbl text-xs">
+                              <thead><tr><th>Description</th><th>Type</th><th className="text-right">Amount</th><th></th></tr></thead>
+                              <tbody>
+                                {(adjustments[s.id] ?? []).map((adj) =>
+                                  editingAdj === adj.id ? (
+                                    <tr key={adj.id} className="bg-teal-500/5">
+                                      <td>
+                                        <input
+                                          autoFocus
+                                          type="text"
+                                          value={editAdjForm.desc}
+                                          onChange={(e) => setEditAdjForm((f) => ({ ...f, desc: e.target.value }))}
+                                          className="w-full bg-[#1A2744] border border-teal-500/40 rounded px-2 py-0.5 text-xs text-[#E8F0FF] focus:outline-none"
+                                        />
+                                      </td>
+                                      <td>
+                                        <select
+                                          value={editAdjForm.type}
+                                          onChange={(e) => setEditAdjForm((f) => ({ ...f, type: e.target.value as "add" | "deduct" }))}
+                                          className="bg-[#1A2744] border border-teal-500/40 rounded px-1.5 py-0.5 text-xs text-[#E8F0FF] focus:outline-none"
+                                        >
+                                          <option value="add">+ Add</option>
+                                          <option value="deduct">− Deduct</option>
+                                        </select>
+                                      </td>
+                                      <td className="text-right">
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={editAdjForm.amount}
+                                          onChange={(e) => setEditAdjForm((f) => ({ ...f, amount: e.target.value }))}
+                                          className="w-24 bg-[#1A2744] border border-teal-500/40 rounded px-2 py-0.5 text-xs font-mono text-right text-[#E8F0FF] focus:outline-none"
+                                        />
+                                      </td>
+                                      <td>
+                                        <div className="flex gap-1">
+                                          <button onClick={() => handleSaveAdjustment(s.id, adj.id)} disabled={saving} className="p-1 text-teal-400 hover:text-teal-300 transition-colors">
+                                            <Check size={13} />
+                                          </button>
+                                          <button onClick={() => setEditingAdj(null)} className="p-1 text-[#7B91BC] hover:text-[#E8F0FF] transition-colors">
+                                            <X size={13} />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    <tr key={adj.id}>
+                                      <td className="text-[#E8F0FF]">{adj.description}</td>
+                                      <td>
+                                        {adj.type === "add"
+                                          ? <span className="badge" style={{ background: "rgba(45,212,191,0.1)", color: "#2DD4BF", border: "1px solid rgba(45,212,191,0.2)" }}>+ Add</span>
+                                          : <span className="badge" style={{ background: "rgba(239,68,68,0.1)", color: "#F87171", border: "1px solid rgba(239,68,68,0.2)" }}>− Deduct</span>}
+                                      </td>
+                                      <td className={`text-right font-mono font-bold ${adj.type === "add" ? "text-teal-400" : "text-red-400"}`}>
+                                        {adj.type === "add" ? "+" : "−"}{rm(adj.amount)}
+                                      </td>
+                                      <td>
+                                        <div className="flex gap-1">
+                                          <button
+                                            onClick={() => { setEditingAdj(adj.id); setEditAdjForm({ desc: adj.description, amount: String(adj.amount), type: adj.type }); }}
+                                            className="p-1 text-[#7B91BC] hover:text-teal-400 transition-colors"
+                                          >
+                                            <Pencil size={13} />
+                                          </button>
+                                          <button onClick={() => handleDeleteAdjustment(s.id, adj.id)} className="p-1 text-[#7B91BC] hover:text-red-400 transition-colors">
+                                            <X size={13} />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )
+                                )}
+                              </tbody>
+                            </table>
+                          )}
+                          <div className="flex gap-2 p-3 border-t border-[#1E2D4A] flex-wrap">
+                            <input
+                              type="text"
+                              placeholder="Description (e.g. Cash sale, Uniform deduction)"
+                              value={adjForms[s.id]?.desc ?? ""}
+                              onChange={(e) => setAdjForms((prev) => ({ ...prev, [s.id]: { desc: e.target.value, amount: prev[s.id]?.amount ?? "", type: prev[s.id]?.type ?? "add" } }))}
+                              className="flex-1 min-w-40 bg-[#1A2744] border border-[#2A3F6A] rounded-lg px-3 py-1.5 text-xs text-[#E8F0FF] focus:outline-none focus:border-teal-500"
+                            />
+                            <input
+                              type="number"
+                              placeholder="Amount (RM)"
+                              min={0}
+                              value={adjForms[s.id]?.amount ?? ""}
+                              onChange={(e) => setAdjForms((prev) => ({ ...prev, [s.id]: { desc: prev[s.id]?.desc ?? "", amount: e.target.value, type: prev[s.id]?.type ?? "add" } }))}
+                              className="w-32 bg-[#1A2744] border border-[#2A3F6A] rounded-lg px-3 py-1.5 text-xs font-mono text-[#E8F0FF] focus:outline-none focus:border-teal-500"
+                            />
+                            <select
+                              value={adjForms[s.id]?.type ?? "add"}
+                              onChange={(e) => setAdjForms((prev) => ({ ...prev, [s.id]: { desc: prev[s.id]?.desc ?? "", amount: prev[s.id]?.amount ?? "", type: e.target.value as "add" | "deduct" } }))}
+                              className="bg-[#1A2744] border border-[#2A3F6A] rounded-lg px-2 py-1.5 text-xs text-[#E8F0FF] focus:outline-none focus:border-teal-500"
+                            >
+                              <option value="add">+ Add to Pay</option>
+                              <option value="deduct">− Deduct from Pay</option>
+                            </select>
+                            <button onClick={() => handleAddAdjustment(s.id)} disabled={saving} className="btn btn-primary text-xs py-1.5 px-3">
+                              <Plus size={12} /> Add
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}

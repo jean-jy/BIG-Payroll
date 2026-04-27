@@ -79,6 +79,15 @@ export type AttendanceRecord = {
   overrideReason?: string;
 };
 
+export type PayrollAdjustment = {
+  id: string;
+  staffId: string;
+  month: string;
+  description: string;
+  amount: number;
+  type: "add" | "deduct";
+};
+
 export type PayrollEntry = {
   staffId: string;
   month: string;
@@ -91,6 +100,7 @@ export type PayrollEntry = {
   earlyLeaveHours: number;
   earlyLeavePenalty: number;
   performanceAllowance: number;
+  adjustmentNet: number;
   grossPay: number;
   epfEmployee: number;
   epfEmployer: number;
@@ -118,6 +128,29 @@ export type CommissionLine = {
   saleCategory: SaleCategory;
 };
 
+
+export type LeaveType = "annual" | "medical" | "off" | "leave";
+
+export type DoctorSchedule = {
+  id: string;
+  staffId: string;
+  date: string;
+  branchId: string;
+  startTime?: string;
+  endTime?: string;
+  notes?: string;
+  isLeave: boolean;
+  leaveType?: LeaveType;
+};
+
+export type ClosureType = "public_holiday" | "clinic_closed";
+
+export type ClinicClosure = {
+  id: string;
+  date: string;
+  type: ClosureType;
+  name: string;
+};
 
 export type ImportRecord = {
   id: string;

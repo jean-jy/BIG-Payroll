@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { Branch, Staff, TreatmentType, TreatmentRecord, AttendanceRecord } from "./types";
+import { Branch, Staff, TreatmentType, TreatmentRecord, AttendanceRecord, PayrollAdjustment, DoctorSchedule, ClinicClosure } from "./types";
 
 export type PerformanceAllowanceMap = Record<string, number>;
 
@@ -303,6 +303,35 @@ export async function upsertAttendance(a: Partial<AttendanceRecord>): Promise<At
   };
 }
 
+// ── Import History ───────────────────────────────────────────────────────────
+export type ImportHistoryEntry = {
+  id: string; branchId: string; branchName: string; month: string;
+  importedAt: string; recordCount: number; totalAmount: number; filename: string;
+};
+
+export async function fetchImportHistory(): Promise<ImportHistoryEntry[]> {
+  const { data, error } = await supabase
+    .from("import_history")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return data.map((r) => ({
+    id: r.id, branchId: r.branch_id, branchName: r.branch_name,
+    month: r.month, importedAt: r.imported_at,
+    recordCount: r.record_count, totalAmount: r.total_amount, filename: r.filename,
+  }));
+}
+
+export async function insertImportHistory(entry: ImportHistoryEntry): Promise<void> {
+  const { error } = await supabase.from("import_history").insert({
+    id: entry.id, branch_id: entry.branchId, branch_name: entry.branchName,
+    month: entry.month, imported_at: entry.importedAt,
+    record_count: entry.recordCount, total_amount: entry.totalAmount, filename: entry.filename,
+  });
+  if (error) throw error;
+}
+
 // ── Payroll Periods ──────────────────────────────────────────────────────────
 export async function fetchPayrollStatuses(month: string): Promise<Record<string, "draft" | "finalised">> {
   const { data, error } = await supabase
@@ -326,5 +355,139 @@ export async function finaliseAllPayroll(staffIds: string[], month: string) {
     staff_id: id, month, status: "finalised", finalised_at: new Date().toISOString(),
   }));
   const { error } = await supabase.from("payroll_periods").upsert(rows, { onConflict: "month,staff_id" });
+  if (error) throw error;
+}
+
+// ── Payroll Adjustments ──────────────────────────────────────────────────────
+export type AdjustmentMap = Record<string, PayrollAdjustment[]>;
+
+export async function fetchPayrollAdjustments(month: string): Promise<AdjustmentMap> {
+  const { data, error } = await supabase
+    .from("payroll_adjustments")
+    .select("*")
+    .eq("month", month)
+    .order("created_at");
+  if (error) throw error;
+  const map: AdjustmentMap = {};
+  for (const r of data) {
+    if (!map[r.staff_id]) map[r.staff_id] = [];
+    map[r.staff_id].push({ id: r.id, staffId: r.staff_id, month: r.month, description: r.description, amount: r.amount, type: r.type });
+  }
+  return map;
+}
+
+export async function insertPayrollAdjustment(adj: Omit<PayrollAdjustment, "id">): Promise<PayrollAdjustment> {
+  const { data, error } = await supabase
+    .from("payroll_adjustments")
+    .insert({ staff_id: adj.staffId, month: adj.month, description: adj.description, amount: adj.amount, type: adj.type })
+    .select()
+    .single();
+  if (error) throw error;
+  return { id: data.id, staffId: data.staff_id, month: data.month, description: data.description, amount: data.amount, type: data.type };
+}
+
+export async function updatePayrollAdjustment(id: string, updates: { description: string; amount: number; type: "add" | "deduct" }) {
+  const { error } = await supabase
+    .from("payroll_adjustments")
+    .update({ description: updates.description, amount: updates.amount, type: updates.type })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function deletePayrollAdjustment(id: string) {
+  const { error } = await supabase.from("payroll_adjustments").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── Doctor Schedules ─────────────────────────────────────────────────────────
+export async function fetchDoctorSchedules(month: string): Promise<DoctorSchedule[]> {
+  const [y, m] = month.split("-").map(Number);
+  const start = `${month}-01`;
+  const end = new Date(y, m, 1).toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("doctor_schedules")
+    .select("*")
+    .gte("date", start)
+    .lt("date", end)
+    .order("date");
+  if (error) throw error;
+  return data.map((r) => ({
+    id: r.id,
+    staffId: r.staff_id,
+    date: r.date,
+    branchId: r.branch_id,
+    startTime: r.start_time ?? undefined,
+    endTime: r.end_time ?? undefined,
+    notes: r.notes ?? undefined,
+    isLeave: r.is_leave,
+    leaveType: r.leave_type ?? undefined,
+  }));
+}
+
+export async function upsertDoctorSchedule(s: Omit<DoctorSchedule, "id"> & { id?: string }): Promise<DoctorSchedule> {
+  const row = {
+    ...(s.id ? { id: s.id } : {}),
+    staff_id: s.staffId,
+    date: s.date,
+    branch_id: s.branchId,
+    start_time: s.startTime ?? null,
+    end_time: s.endTime ?? null,
+    notes: s.notes ?? null,
+    is_leave: s.isLeave,
+    leave_type: s.leaveType ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("doctor_schedules")
+    .upsert(row, { onConflict: "staff_id,date" })
+    .select()
+    .single();
+  if (error) throw error;
+  return {
+    id: data.id,
+    staffId: data.staff_id,
+    date: data.date,
+    branchId: data.branch_id,
+    startTime: data.start_time ?? undefined,
+    endTime: data.end_time ?? undefined,
+    notes: data.notes ?? undefined,
+    isLeave: data.is_leave,
+    leaveType: data.leave_type ?? undefined,
+  };
+}
+
+export async function deleteDoctorSchedule(id: string): Promise<void> {
+  const { error } = await supabase.from("doctor_schedules").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── Clinic Closures ──────────────────────────────────────────────────────────
+export async function fetchClinicClosures(month: string): Promise<ClinicClosure[]> {
+  const [y, m] = month.split("-").map(Number);
+  const start = `${month}-01`;
+  const end = new Date(y, m, 1).toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("clinic_closures")
+    .select("*")
+    .gte("date", start)
+    .lt("date", end)
+    .order("date");
+  if (error) throw error;
+  return data.map((r) => ({ id: r.id, date: r.date, type: r.type, name: r.name }));
+}
+
+export async function upsertClinicClosure(c: Omit<ClinicClosure, "id"> & { id?: string }): Promise<ClinicClosure> {
+  const row = { ...(c.id ? { id: c.id } : {}), date: c.date, type: c.type, name: c.name };
+  const { data, error } = await supabase
+    .from("clinic_closures")
+    .upsert(row, { onConflict: "date" })
+    .select()
+    .single();
+  if (error) throw error;
+  return { id: data.id, date: data.date, type: data.type, name: data.name };
+}
+
+export async function deleteClinicClosure(id: string): Promise<void> {
+  const { error } = await supabase.from("clinic_closures").delete().eq("id", id);
   if (error) throw error;
 }

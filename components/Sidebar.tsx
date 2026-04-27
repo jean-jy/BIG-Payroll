@@ -13,11 +13,13 @@ import {
   Stethoscope,
   ChevronRight,
   ClipboardCheck,
+  CalendarDays,
 } from "lucide-react";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/staff", label: "Staff", icon: Users },
+  { href: "/schedule", label: "Dr Schedule", icon: CalendarDays },
   { href: "/import", label: "POS Import", icon: Upload },
   { href: "/review", label: "Review & Annotate", icon: ClipboardCheck },
   { href: "/payroll", label: "Payroll", icon: Calculator },

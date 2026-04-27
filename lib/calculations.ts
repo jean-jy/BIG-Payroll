@@ -1,4 +1,4 @@
-import { Staff, TreatmentRecord, AttendanceRecord, TreatmentType, PayrollEntry, CommissionLine } from "./types";
+import { Staff, TreatmentRecord, AttendanceRecord, TreatmentType, PayrollEntry, CommissionLine, PayrollAdjustment } from "./types";
 
 const OT_RATE = 12;
 const CLINIC_END_HOUR = 19;
@@ -89,7 +89,8 @@ export function calcPayroll(
   records: TreatmentRecord[],
   attendance: AttendanceRecord[],
   treatmentTypes: TreatmentType[],
-  performanceAllowance = 0
+  performanceAllowance = 0,
+  adjustments: PayrollAdjustment[] = []
 ): PayrollEntry {
   const ttMap = Object.fromEntries(treatmentTypes.map((t) => [t.id, t]));
   const myRecords = records.filter((r) => r.staffId === s.id && r.date.startsWith(month));
@@ -144,21 +145,15 @@ export function calcPayroll(
       payBasis = "basic";
     }
   } else if (s.role === "locum_dentist") {
-    // Group by date, compare per day
     const days = Array.from(new Set(eligibleRecords.map((r) => r.date)));
-    for (const day of days) {
-      const dayRecords = eligibleRecords.filter((r) => r.date === day);
-      const lines = dayRecords.map((r) =>
-        calcCommissionLine(r, ttMap[r.treatmentTypeId], s.commissionRate ?? 0)
-      );
-      commissionBreakdown.push(...lines);
-      const dayComm = lines.reduce((sum, l) => sum + l.commission, 0);
-      const dayRate = s.dailyRate ?? 0;
-      totalCommission += dayComm;
-      finalPay += Math.max(dayRate, dayComm);
-    }
+    const lines = eligibleRecords.map((r) =>
+      calcCommissionLine(r, ttMap[r.treatmentTypeId], s.commissionRate ?? 0)
+    );
+    commissionBreakdown.push(...lines);
+    totalCommission = lines.reduce((sum, l) => sum + l.commission, 0);
     basicOrDailyOrHourly = (s.dailyRate ?? 0) * days.length;
-    payBasis = "mixed";
+    finalPay = Math.max(basicOrDailyOrHourly, totalCommission);
+    payBasis = totalCommission > basicOrDailyOrHourly ? "commission" : "basic";
   } else if (s.role === "parttime_da") {
     const totalHours = myAttendance.reduce((sum, a) => {
       const [inH, inM] = a.clockIn.split(":").map(Number);
@@ -175,7 +170,8 @@ export function calcPayroll(
     payBasis = "basic";
   }
 
-  const grossPay = Math.max(0, finalPay + otPay - earlyLeavePenalty + performanceAllowance);
+  const adjustmentNet = adjustments.reduce((sum, a) => sum + (a.type === "add" ? a.amount : -a.amount), 0);
+  const grossPay = Math.max(0, finalPay + otPay - earlyLeavePenalty + performanceAllowance + adjustmentNet);
   const noStatutory = s.role === "fulltime_dsa_monthly" || s.role === "resident_dentist" || s.role === "locum_dentist";
   const stat = noStatutory
     ? { epfEmployee: 0, epfEmployer: 0, socsoEmployee: 0, socsoEmployer: 0, eisEmployee: 0, eisEmployer: 0 }
@@ -195,6 +191,7 @@ export function calcPayroll(
     earlyLeaveHours,
     earlyLeavePenalty,
     performanceAllowance,
+    adjustmentNet,
     grossPay,
     ...stat,
     totalDeductions,

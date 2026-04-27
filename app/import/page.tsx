@@ -1,24 +1,24 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Branch } from "@/lib/types";
-import { fetchBranches, insertTreatmentRecords, fetchTreatmentTypes, fetchStaff, deleteTreatmentRecordsByBranchMonth } from "@/lib/db";
+import { fetchBranches, insertTreatmentRecords, fetchTreatmentTypes, fetchStaff, deleteTreatmentRecordsByBranchMonth, fetchImportHistory, insertImportHistory, ImportHistoryEntry } from "@/lib/db";
 import { Upload, CheckCircle2, FileSpreadsheet, AlertCircle, X, Download, Trash2, ArrowRight } from "lucide-react";
 import Loading from "@/components/Loading";
 
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 
-const MONTHS = [
-  { label: "April 2026",    value: "2026-04" },
-  { label: "March 2026",   value: "2026-03" },
-  { label: "February 2026", value: "2026-02" },
-  { label: "January 2026",  value: "2026-01" },
-  { label: "December 2025", value: "2025-12" },
-  { label: "November 2025", value: "2025-11" },
-];
+const MONTHS = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - i);
+  const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const label = d.toLocaleDateString("en-MY", { month: "long", year: "numeric" });
+  return { label, value };
+});
 
 type PreviewRow = { date: string; staff: string; treatment: string; fee: number; labCost?: number; patient: string; saleCategory?: "treatment" | "product" | "medicine" };
+type RawRow = PreviewRow & { skipReason: string | null };
 
-type HistoryEntry = { id: string; branchId: string; branchName: string; month: string; importedAt: string; recordCount: number; totalAmount: number; filename: string };
 
 function downloadTemplate() {
   const csv = [
@@ -54,9 +54,9 @@ function detectCategory(type: string, category: string): "treatment" | "product"
 }
 
 
-function parseCSV(text: string): PreviewRow[] {
+function parseCSV(text: string): { kept: PreviewRow[]; all: RawRow[] } {
   const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
+  if (lines.length < 2) return { kept: [], all: [] };
 
   // Parse header — handle quoted cells
   const parseRow = (line: string) => {
@@ -83,7 +83,6 @@ function parseCSV(text: string): PreviewRow[] {
     return -1;
   };
 
-  // Detect format: payment_allocation_report vs generic POS
   const isAllocationReport = headers.some((h) => h.includes("employee allocation") || h.includes("allocation (myr)"));
 
   const iDate       = col(["date"]);
@@ -94,39 +93,80 @@ function parseCSV(text: string): PreviewRow[] {
   const iLabCost    = col(["labcost", "lab_cost", "lab cost"]);
   const iType       = col(["type"]);
   const iCategory   = col(["category"]);
-
   const iStatus     = col(["status"]);
 
-  return lines.slice(1).flatMap((line) => {
-    if (!line.trim()) return [];
+  const all: RawRow[] = [];
+
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
     const cols = parseRow(line);
     const get = (i: number) => (i >= 0 ? (cols[i] ?? "").replace(/"/g, "").trim() : "");
 
     const status = get(iStatus).toLowerCase();
-    // Skip cancelled/voided rows; include fully paid and partial paid
-    if (status && !status.includes("paid")) return [];
-
     const rawDate = get(iDate);
-    if (!rawDate) return [];
-    const date = parseDateDMY(rawDate);
-
+    const date = parseDateDMY(rawDate || "");
     const feeRaw = get(iFee).replace(/,/g, "");
     const fee = parseFloat(feeRaw) || 0;
-    if (fee <= 0) return [];
-
     const saleCategory = detectCategory(get(iType), get(iCategory));
     const labCost = parseFloat(get(iLabCost).replace(/,/g, "")) || 0;
 
-    return [{
+    const base: Omit<RawRow, "skipReason"> = {
       date,
-      staff:       get(iStaff),
-      patient:     get(iPatient),
-      treatment:   get(iItem),
+      staff:    get(iStaff),
+      patient:  get(iPatient),
+      treatment: get(iItem),
       fee,
       labCost,
       saleCategory,
-    }];
-  });
+    };
+
+    // Only skip rows explicitly cancelled/voided/refunded — don't require "paid"
+    // because many POS systems use "Completed", "Done", "Success", etc.
+    const SKIP_STATUSES = ["cancel", "void", "refund", "reject", "failed"];
+    let skipReason: string | null = null;
+    if (status && SKIP_STATUSES.some((s) => status.includes(s))) skipReason = `Status: ${get(iStatus)}`;
+    else if (!rawDate) skipReason = "No date";
+    else if (fee < 0) skipReason = "Voided sale (negative amount)";
+    else if (fee === 0) skipReason = "Zero amount";
+
+    all.push({ ...base, skipReason });
+  }
+
+  // Netting pass: when a (date, staff, patient, treatment) group contains negative rows,
+  // cancel matching positive rows starting from the latest in the file. This handles the
+  // POS void-then-reenter pattern where the original entry is voided and re-entered with
+  // a corrected "Processed By" — the re-entered duplicate (appearing later) should be skipped.
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < all.length; i++) {
+    const r = all[i];
+    const key = `${r.date}|${r.staff.toLowerCase()}|${r.patient.toLowerCase()}|${r.treatment.toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(i);
+  }
+  for (const indices of groups.values()) {
+    const negAmount = indices
+      .filter(i => all[i].fee < 0)
+      .reduce((sum, i) => sum + Math.abs(all[i].fee), 0);
+    if (negAmount === 0) continue;
+    let remaining = negAmount;
+    // Cancel latest positive rows first so earlier (replacement) rows are preserved
+    const posIndices = indices
+      .filter(i => all[i].fee > 0 && !all[i].skipReason)
+      .sort((a, b) => b - a);
+    for (const i of posIndices) {
+      if (remaining <= 0) break;
+      if (all[i].fee <= remaining) {
+        remaining -= all[i].fee;
+        all[i].skipReason = "Cancelled by void";
+      }
+    }
+  }
+
+  const kept: PreviewRow[] = all
+    .filter(r => !r.skipReason)
+    .map(({ skipReason: _sr, ...row }) => row);
+
+  return { kept, all };
 }
 
 
@@ -140,12 +180,18 @@ export default function ImportPage() {
   const [selectedBranch, setSelectedBranch] = useState("");
   const [filename, setFilename]         = useState("");
   const [previewRows, setPreviewRows]   = useState<PreviewRow[]>([]);
-  const [history, setHistory]           = useState<HistoryEntry[]>([]);
-  const [month, setMonth]               = useState("2026-04");
+  const [rawRows, setRawRows]           = useState<RawRow[]>([]);
+  const [showRaw, setShowRaw]           = useState(false);
+  const [history, setHistory]           = useState<ImportHistoryEntry[]>([]);
+  const [month, setMonth]               = useState(MONTHS[0].value);
   const [replaceMode, setReplaceMode]   = useState(true);
   const [clearing, setClearing]         = useState(false);
   const [skippedItems, setSkippedItems] = useState<string[]>([]);
   const monthLabel = MONTHS.find(m => m.value === month)?.label ?? month;
+
+  useEffect(() => {
+    fetchImportHistory().then(setHistory).catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetchBranches().then((b) => {
@@ -157,8 +203,17 @@ export default function ImportPage() {
   async function processFile(file: File) {
     setFilename(file.name);
     const text = await file.text();
-    const rows = parseCSV(text);
-    setPreviewRows(rows.length > 0 ? rows : [
+    const { kept, all } = parseCSV(text);
+    setRawRows(all);
+    setShowRaw(false);
+
+    // Auto-detect month from the data so the delete targets the right period
+    if (kept.length > 0) {
+      const detected = kept.map(r => r.date).filter(Boolean).sort()[0]?.substring(0, 7);
+      if (detected && MONTHS.some(m => m.value === detected)) setMonth(detected);
+    }
+
+    setPreviewRows(kept.length > 0 ? kept : [
       { date: `${month}-13`, staff: "Staff Name", treatment: "Treatment", fee: 0, patient: "Patient" },
     ]);
     setStep("preview");
@@ -183,20 +238,15 @@ export default function ImportPage() {
       setSaving(true);
       setError(null);
 
-      if (replaceMode) {
-        await deleteTreatmentRecordsByBranchMonth(selectedBranch, month);
-      }
-
       const [tTypes, staffList] = await Promise.all([fetchTreatmentTypes(), fetchStaff()]);
 
       const skipped: string[] = [];
-      const records = previewRows.flatMap((r) => {
+      const records = previewRows.filter(r => r.fee > 0).flatMap((r) => {
         const csvName = r.staff.toLowerCase().trim();
-        const branchStaff = staffList.filter(s => s.branchId === selectedBranch);
         const matchedStaff =
-          branchStaff.find(s => s.name.toLowerCase() === csvName) ??
-          branchStaff.find(s => s.name.toLowerCase().includes(csvName)) ??
-          branchStaff.find(s => csvName.includes(s.name.toLowerCase()));
+          staffList.find(s => s.name.toLowerCase() === csvName) ??
+          staffList.find(s => s.name.toLowerCase().includes(csvName)) ??
+          staffList.find(s => csvName.includes(s.name.toLowerCase()));
         const itemLower = r.treatment.toLowerCase().trim();
         // Sort longest name first so more specific matches win
         const sorted = [...tTypes].sort((a, b) => b.name.length - a.name.length);
@@ -230,11 +280,18 @@ export default function ImportPage() {
 
 
 
-      if (records.length > 0) {
-        await insertTreatmentRecords(records);
+      if (records.length === 0) {
+        setError("Nothing to import — no rows matched staff and treatment types. Old data was NOT deleted.");
+        return;
       }
 
-      const entry: HistoryEntry = {
+      // Delete only after we know there's something to insert, so replace never wipes data and leaves nothing.
+      if (replaceMode) {
+        await deleteTreatmentRecordsByBranchMonth(selectedBranch, month);
+      }
+      await insertTreatmentRecords(records);
+
+      const entry: ImportHistoryEntry = {
         id:          "imp" + Date.now(),
         branchId:    selectedBranch,
         branchName:  branch.name,
@@ -244,6 +301,7 @@ export default function ImportPage() {
         totalAmount: previewRows.reduce((s, r) => s + r.fee, 0),
         filename,
       };
+      await insertImportHistory(entry);
       setHistory((prev) => [entry, ...prev]);
       setSkippedItems(skipped);
       setStep("done");
@@ -372,6 +430,47 @@ export default function ImportPage() {
                 )}
               </tbody>
             </table>
+          </div>
+          {/* Raw data toggle */}
+          <div className="border-t border-[#1E2D4A]">
+            <button
+              className="w-full px-5 py-3 flex items-center justify-between text-xs text-[#7B91BC] hover:text-[#E8F0FF] hover:bg-[#111D36] transition-colors"
+              onClick={() => setShowRaw(v => !v)}
+            >
+              <span className="font-semibold uppercase tracking-widest">
+                Raw Data — {rawRows.length} total rows
+                {rawRows.filter(r => r.skipReason).length > 0 && (
+                  <span className="ml-2 text-red-400">({rawRows.filter(r => r.skipReason).length} skipped)</span>
+                )}
+              </span>
+              <span>{showRaw ? "▲ Hide" : "▼ Show"}</span>
+            </button>
+            {showRaw && (
+              <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                <table className="tbl">
+                  <thead>
+                    <tr><th>Date</th><th>Staff</th><th>Patient</th><th>Treatment</th><th className="text-right">Fee (RM)</th><th>Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {rawRows.map((r, i) => (
+                      <tr key={i} className={r.skipReason ? "opacity-40" : ""}>
+                        <td className="font-mono text-xs text-[#7B91BC]">{r.date}</td>
+                        <td className="text-sm text-[#E8F0FF]">{r.staff}</td>
+                        <td className="text-xs text-[#7B91BC]">{r.patient}</td>
+                        <td className="text-sm text-[#7B91BC]">{r.treatment}</td>
+                        <td className={`text-right font-mono text-sm ${r.fee < 0 ? "text-red-400" : "text-[#E8F0FF]"}`}>{r.fee.toFixed(2)}</td>
+                        <td>
+                          {r.skipReason
+                            ? <span className="badge" style={{ background: "rgba(239,68,68,0.1)", color: "#F87171", border: "1px solid rgba(239,68,68,0.2)" }}>{r.skipReason}</span>
+                            : <span className="badge" style={{ background: "rgba(16,185,129,0.1)", color: "#34D399", border: "1px solid rgba(16,185,129,0.2)" }}>Imported</span>
+                          }
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
           <div className="px-5 py-4 border-t border-[#1E2D4A] space-y-3">
             <div className="flex items-start gap-2 text-xs text-amber-400">
