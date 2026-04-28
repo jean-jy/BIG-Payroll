@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Trash2,
   Flag,
+  Printer,
 } from "lucide-react";
 import {
   fetchStaff,
@@ -374,6 +375,9 @@ export default function SchedulePage() {
           <span className="font-display font-600 text-sm text-[#E8F0FF] min-w-[148px] text-center">{formatMonthLabel(month)}</span>
           <button onClick={() => setMonth(shiftMonth(month, 1))} className="btn btn-ghost p-2"><ChevronRight size={16} /></button>
           <button onClick={() => setMonth(toMonthStr(new Date()))} className="btn btn-ghost text-xs px-3">Today</button>
+          <a href={`/schedule/print?month=${month}`} target="_blank" rel="noopener noreferrer" className="btn btn-ghost gap-1.5 text-xs px-3">
+            <Printer size={13} /> Print View
+          </a>
         </div>
       </div>
 
