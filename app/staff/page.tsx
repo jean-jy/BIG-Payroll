@@ -317,6 +317,13 @@ export default function StaffPage() {
                 <input className="inp" type="number" min="0" placeholder="e.g. 300 — leave 0 if not eligible" value={modal.data.performanceAllowanceCap ?? 0} onChange={(e) => set("performanceAllowanceCap", parseFloat(e.target.value) || 0)} />
                 <p className="text-[10px] text-[#7B91BC] mt-1">Maximum allowance payable per month. Actual amount is entered in Payroll each month.</p>
               </div>
+              {(modal.data.role === "fulltime_da" || modal.data.role === "fulltime_dsa_monthly") && (
+                <div>
+                  <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Fixed OT Pay (RM/month)</label>
+                  <input className="inp" type="number" min="0" placeholder="e.g. 200 — leave 0 if calculated from attendance" value={modal.data.fixedOtPay ?? 0} onChange={(e) => set("fixedOtPay", parseFloat(e.target.value) || 0)} />
+                  <p className="text-[10px] text-[#7B91BC] mt-1">If set, this fixed amount is applied every month instead of calculating OT from clock-out time.</p>
+                </div>
+              )}
             </div>
             <div className="px-6 py-4 border-t border-[#1E2D4A] flex justify-end gap-3">
               <button className="btn btn-ghost" onClick={closeModal}>Cancel</button>

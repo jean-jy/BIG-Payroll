@@ -47,6 +47,7 @@ export async function fetchStaff(): Promise<Staff[]> {
     isActive: r.is_active,
     joinDate: r.join_date,
     performanceAllowanceCap: r.performance_allowance_cap ?? 0,
+    fixedOtPay: r.fixed_ot_pay ?? 0,
   }));
 }
 
@@ -67,6 +68,7 @@ export async function upsertStaff(s: Partial<Staff>): Promise<Staff> {
     is_active: s.isActive ?? true,
     join_date: s.joinDate ?? null,
     performance_allowance_cap: s.performanceAllowanceCap ?? 0,
+    fixed_ot_pay: s.fixedOtPay ?? 0,
   };
   const { data, error } = await supabase
     .from("staff")
@@ -82,6 +84,7 @@ export async function upsertStaff(s: Partial<Staff>): Promise<Staff> {
     epfNumber: data.epf_number, socsoNumber: data.socso_number,
     isActive: data.is_active, joinDate: data.join_date,
     performanceAllowanceCap: data.performance_allowance_cap ?? 0,
+    fixedOtPay: data.fixed_ot_pay ?? 0,
   };
 }
 

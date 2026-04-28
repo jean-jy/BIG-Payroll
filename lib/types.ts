@@ -38,6 +38,7 @@ export type Staff = {
   isActive: boolean;
   joinDate: string;
   performanceAllowanceCap?: number;
+  fixedOtPay?: number;
 };
 
 export type SaleCategory = "treatment" | "product" | "medicine";

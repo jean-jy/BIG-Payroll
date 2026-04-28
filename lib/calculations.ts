@@ -98,10 +98,11 @@ export function calcPayroll(
 
   // OT & early leave — only for DAs
   const isDA = s.role === "fulltime_da" || s.role === "fulltime_dsa_monthly" || s.role === "parttime_da";
-  const otHours = isDA
+  const hasFixedOt = (s.fixedOtPay ?? 0) > 0;
+  const otHours = isDA && !hasFixedOt
     ? myAttendance.reduce((sum, a) => sum + (a.otOverride ?? a.otHours), 0)
     : 0;
-  const otPay = otHours * OT_RATE;
+  const otPay = hasFixedOt ? (s.fixedOtPay ?? 0) : otHours * OT_RATE;
 
   // Hourly rate for deduction: PT DA uses hourlyRate; FT DA = (basic / 26 days) / 7.5 hrs
   const daHourlyRate =

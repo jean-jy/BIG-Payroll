@@ -341,7 +341,9 @@ export default function PayrollPage() {
                         )}
                         {p.otPay > 0 && (
                           <div className="flex justify-between py-2 border-b border-[#1E2D4A]/40">
-                            <span className="text-sm text-[#7B91BC]">OT ({p.otHours.toFixed(1)} hrs × RM12)</span>
+                            <span className="text-sm text-[#7B91BC]">
+                              {(s.fixedOtPay ?? 0) > 0 ? "OT (fixed)" : `OT (${p.otHours.toFixed(1)} hrs × RM12)`}
+                            </span>
                             <span className="font-mono text-sm text-amber-400">+{rm(p.otPay)}</span>
                           </div>
                         )}
