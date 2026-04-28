@@ -63,6 +63,10 @@ export default function SchedulePrintPage() {
   const [closures, setClosures] = useState<ClinicClosure[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Section visibility toggles
+  const [showBranches, setShowBranches] = useState<Record<string, boolean>>({});
+  const [showLeave, setShowLeave] = useState(true);
+
   const dentists = useMemo(
     () => staff.filter((s) => s.isActive && (s.role === "resident_dentist" || s.role === "locum_dentist")),
     [staff],
@@ -71,7 +75,12 @@ export default function SchedulePrintPage() {
   useEffect(() => {
     (async () => {
       const [s, b] = await Promise.all([fetchStaff(), fetchBranches()]);
-      setStaff(s); setBranches(b);
+      setStaff(s);
+      setBranches(b);
+      // Default all branches to visible
+      const defaults: Record<string, boolean> = {};
+      b.forEach((br) => { defaults[br.id] = true; });
+      setShowBranches(defaults);
     })();
   }, []);
 
@@ -123,9 +132,9 @@ export default function SchedulePrintPage() {
             const day = dayIndex >= 0 && dayIndex < days.length ? days[dayIndex] : null;
             const dateStr = day ? day.toISOString().slice(0, 10) : null;
             const isToday = dateStr === TODAY;
-            const isWeekend = day ? day.getDay() === 0 || day.getDay() === 6 : false;
             const closure = dateStr ? closureMap[dateStr] : null;
             const closureStyle = closure ? CLOSURE_STYLES[closure.type] : null;
+            const isWeekend = day ? day.getDay() === 0 || day.getDay() === 6 : false;
             const dutyDrs = dateStr
               ? Object.values(scheduleMap[dateStr] ?? {}).filter((s) => !s.isLeave && s.branchId === branch.id)
               : [];
@@ -253,7 +262,7 @@ export default function SchedulePrintPage() {
 
   return (
     <>
-      {/* Hide sidebar and nav when printing */}
+      {/* Hide sidebar, nav, and toolbar when printing */}
       <style>{`
         @media print {
           aside, nav { display: none !important; }
@@ -266,16 +275,43 @@ export default function SchedulePrintPage() {
 
       <div className="max-w-5xl mx-auto">
         {/* Toolbar — hidden on print */}
-        <div className="print-hide flex items-center justify-between mb-6 gap-4 flex-wrap">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setMonth(shiftMonth(month, -1))} className="btn btn-ghost p-2"><ChevronLeft size={16} /></button>
-            <span className="font-display font-600 text-sm text-[#E8F0FF] min-w-[148px] text-center">{formatMonthLabel(month)}</span>
-            <button onClick={() => setMonth(shiftMonth(month, 1))} className="btn btn-ghost p-2"><ChevronRight size={16} /></button>
-            <button onClick={() => setMonth(toMonthStr(new Date()))} className="btn btn-ghost text-xs px-3">Today</button>
+        <div className="print-hide flex flex-col gap-4 mb-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setMonth(shiftMonth(month, -1))} className="btn btn-ghost p-2"><ChevronLeft size={16} /></button>
+              <span className="font-display font-600 text-sm text-[#E8F0FF] min-w-[148px] text-center">{formatMonthLabel(month)}</span>
+              <button onClick={() => setMonth(shiftMonth(month, 1))} className="btn btn-ghost p-2"><ChevronRight size={16} /></button>
+              <button onClick={() => setMonth(toMonthStr(new Date()))} className="btn btn-ghost text-xs px-3">Today</button>
+            </div>
+            <button onClick={() => window.print()} className="btn btn-primary gap-2">
+              <Printer size={15} /> Print / Save as PDF
+            </button>
           </div>
-          <button onClick={() => window.print()} className="btn btn-primary gap-2">
-            <Printer size={15} /> Print / Save as PDF
-          </button>
+
+          {/* Section toggles */}
+          <div className="flex items-center gap-2 flex-wrap bg-[#0D1526] border border-[#1E2D4A] rounded-xl px-4 py-3">
+            <span className="text-xs text-[#7B91BC] font-600 uppercase tracking-wider mr-1">Include:</span>
+            {branches.map((br) => {
+              const ck = br.colorKey ?? "a";
+              const activeColor = ck === "a" ? "bg-teal-600/20 border-teal-500/50 text-teal-300" : ck === "b" ? "bg-indigo-600/20 border-indigo-500/50 text-indigo-300" : "bg-rose-600/20 border-rose-500/50 text-rose-300";
+              const on = showBranches[br.id] ?? true;
+              return (
+                <button
+                  key={br.id}
+                  onClick={() => setShowBranches((p) => ({ ...p, [br.id]: !p[br.id] }))}
+                  className={`text-xs px-3 py-1.5 rounded-lg border font-600 transition-colors ${on ? activeColor : "border-[#1E2D4A] text-[#4A5A7A] bg-transparent"}`}
+                >
+                  {br.name}
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setShowLeave((v) => !v)}
+              className={`text-xs px-3 py-1.5 rounded-lg border font-600 transition-colors ${showLeave ? "bg-amber-500/20 border-amber-500/50 text-amber-300" : "border-[#1E2D4A] text-[#4A5A7A] bg-transparent"}`}
+            >
+              Dr On Leave
+            </button>
+          </div>
         </div>
 
         {/* Print header — always visible */}
@@ -284,11 +320,11 @@ export default function SchedulePrintPage() {
           <p className="text-sm text-[#7B91BC] mt-0.5">{formatMonthLabel(month)}</p>
         </div>
 
-        {/* All 3 branch calendars */}
-        {branches.map((b) => renderBranchCalendar(b))}
+        {/* Branch calendars — shown based on toggle */}
+        {branches.filter((b) => showBranches[b.id] ?? true).map((b) => renderBranchCalendar(b))}
 
-        {/* Leave calendar */}
-        {renderLeaveCalendar()}
+        {/* Leave calendar — shown based on toggle */}
+        {showLeave && renderLeaveCalendar()}
 
         {/* Legend */}
         <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-xs text-[#7B91BC] border-t border-[#1E2D4A] pt-3">
