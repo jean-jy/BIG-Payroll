@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Branch, Staff, AttendanceRecord } from "@/lib/types";
+import Link from "next/link";
+import { Branch, Staff, AttendanceRecord, LeaveType } from "@/lib/types";
 import { fetchBranches, fetchStaff, fetchAttendanceRecords, upsertAttendance } from "@/lib/db";
 import { calcOtHours, rm } from "@/lib/calculations";
-import { Clock, Plus, Pencil, AlertTriangle, Upload, CheckCircle2, X, FileSpreadsheet, AlertCircle } from "lucide-react";
+import { Clock, Plus, Pencil, AlertTriangle, Upload, CheckCircle2, X, FileSpreadsheet, AlertCircle, LayoutList } from "lucide-react";
 import Loading from "@/components/Loading";
 import { supabase } from "@/lib/supabase";
 
@@ -13,6 +14,16 @@ const MONTHS = [
 ];
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 const OT_ELIGIBLE = ["fulltime_da", "fulltime_dsa_monthly", "parttime_da"];
+
+const LEAVE_LABELS: Record<LeaveType, string> = {
+  annual: "AL", medical: "MC", off: "OFF", leave: "OL",
+};
+const LEAVE_COLORS: Record<LeaveType, string> = {
+  annual: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  medical: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  off: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+  leave: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+};
 
 type CsvRow = { date: string; clockIn: string; clockOut: string; otHours: number; outlet: string };
 
@@ -35,7 +46,6 @@ function parseRosterCsv(text: string): CsvRow[] {
   const iClockOut= idx(["clock-out", "clock_out", "clockout"]);
 
   return lines.slice(1).flatMap((line) => {
-    // handle quoted CSV fields
     const cols: string[] = [];
     let cur = "", inQ = false;
     for (const ch of line) {
@@ -54,12 +64,10 @@ function parseRosterCsv(text: string): CsvRow[] {
 
     if (!rawDate || !rawIn || !rawOut || rawIn === "-" || rawOut === "-") return [];
 
-    // DD/MM/YYYY → YYYY-MM-DD
     let date = rawDate;
     const dmyMatch = rawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (dmyMatch) date = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
 
-    // HH:MM:SS → HH:MM
     const toHHMM = (t: string) => {
       const m = t.match(/(\d{1,2}):(\d{2})/);
       return m ? `${m[1].padStart(2, "0")}:${m[2]}` : t;
@@ -83,7 +91,6 @@ export default function AttendancePage() {
   const [filterStaff, setFilterStaff] = useState("all");
   const [modal, setModal]           = useState<{ open: boolean; data: Partial<AttendanceRecord> }>({ open: false, data: {} });
 
-  // CSV import state
   const [importStep, setImportStep]       = useState<"idle" | "preview" | "done">("idle");
   const [csvRows, setCsvRows]             = useState<CsvRow[]>([]);
   const [csvFilename, setCsvFilename]     = useState("");
@@ -111,11 +118,11 @@ export default function AttendancePage() {
     const s = staff.find((s) => s.id === r.staffId);
     return s && OT_ELIGIBLE.includes(s.role) && (filterStaff === "all" || r.staffId === filterStaff);
   });
-  const totalOt = filtered.reduce((s, r) => s + (r.otOverride ?? r.otHours), 0);
+  const workRecords = filtered.filter((r) => !r.isLeave);
+  const totalOt = workRecords.reduce((s, r) => s + (r.otOverride ?? r.otHours), 0);
 
-  // ── Manual modal ────────────────────────────────────────────────────────────
   function openAdd() {
-    setModal({ open: true, data: { staffId: eligibleStaff[0]?.id, date: `${month}-13`, clockIn: "09:00", clockOut: "19:00" } });
+    setModal({ open: true, data: { staffId: eligibleStaff[0]?.id, date: `${month}-01`, clockIn: "09:00", clockOut: "19:00", isLeave: false } });
   }
   function openEdit(r: AttendanceRecord) { setModal({ open: true, data: { ...r } }); }
   function closeModal() { setModal({ open: false, data: {} }); }
@@ -123,10 +130,12 @@ export default function AttendancePage() {
 
   async function saveModal() {
     const d = modal.data;
-    if (!d.staffId || !d.date || !d.clockIn || !d.clockOut) return;
+    if (!d.staffId || !d.date) return;
+    if (!d.isLeave && (!d.clockIn || !d.clockOut)) return;
+    if (d.isLeave && !d.leaveType) return;
     try {
       setSaving(true);
-      const otHours = calcOtHours(d.clockOut);
+      const otHours = d.isLeave ? 0 : calcOtHours(d.clockOut!);
       const saved = await upsertAttendance({ ...d, otHours });
       setRecords((prev) =>
         prev.some((r) => r.id === saved.id)
@@ -141,13 +150,11 @@ export default function AttendancePage() {
     }
   }
 
-  // ── CSV import ───────────────────────────────────────────────────────────────
   async function processFile(file: File) {
     setCsvFilename(file.name);
     const text = await file.text();
     const rows = parseRosterCsv(text);
     setCsvRows(rows);
-    // pre-select first eligible DA
     if (!csvStaffId) setCsvStaffId(eligibleStaff[0]?.id ?? "");
     setImportStep("preview");
   }
@@ -171,6 +178,8 @@ export default function AttendancePage() {
         ot_hours: r.otHours,
         ot_override: null,
         override_reason: null,
+        is_leave: false,
+        leave_type: null,
       }));
       const { error: err } = await supabase.from("attendance_records").upsert(rows, { onConflict: "staff_id,date" });
       if (err) throw err;
@@ -197,6 +206,7 @@ export default function AttendancePage() {
           <p className="text-[#7B91BC] text-sm mt-1">{monthLabel} · Dental Surgery Assistants · RM12/hr OT</p>
         </div>
         <div className="flex gap-3 flex-wrap">
+          <Link href="/attendance/summary" className="btn btn-ghost gap-2"><LayoutList size={14} /> Monthly Summary</Link>
           <select className="inp w-auto" value={month} onChange={(e) => { setMonth(e.target.value); setImportStep("idle"); }}>
             {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
@@ -243,23 +253,16 @@ export default function AttendancePage() {
             </div>
             <button className="text-[#7B91BC] hover:text-[#E8F0FF]" onClick={() => setImportStep("idle")}><X size={16} /></button>
           </div>
-
-          {/* Staff selector */}
           <div className="px-5 py-4 border-b border-[#1E2D4A] flex items-center gap-4">
             <div className="flex items-start gap-2 text-xs text-amber-400 flex-1">
               <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
               <span>This file has no staff name. Select which DA this roster belongs to:</span>
             </div>
-            <select
-              className="inp w-auto min-w-[220px]"
-              value={csvStaffId}
-              onChange={(e) => setCsvStaffId(e.target.value)}
-            >
+            <select className="inp w-auto min-w-[220px]" value={csvStaffId} onChange={(e) => setCsvStaffId(e.target.value)}>
               <option value="">— Select Staff —</option>
               {eligibleStaff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
-
           <div className="overflow-x-auto max-h-64 overflow-y-auto">
             <table className="tbl text-sm">
               <thead>
@@ -353,10 +356,20 @@ export default function AttendancePage() {
                       </div>}
                     </td>
                     <td><span className="font-mono text-sm text-[#E8F0FF]">{r.date}</span></td>
-                    <td><span className="font-mono text-sm text-[#7B91BC]">{r.clockIn}</span></td>
-                    <td><span className={`font-mono text-sm ${r.clockOut > "19:00" ? "text-amber-400" : "text-[#7B91BC]"}`}>{r.clockOut}</span></td>
+                    <td>
+                      {r.isLeave
+                        ? <span className={`text-[10px] font-700 px-2 py-0.5 rounded border ${LEAVE_COLORS[r.leaveType ?? "leave"]}`}>
+                            {LEAVE_LABELS[r.leaveType ?? "leave"]}
+                          </span>
+                        : <span className="font-mono text-sm text-[#7B91BC]">{r.clockIn}</span>}
+                    </td>
+                    <td>
+                      {r.isLeave
+                        ? <span className="text-[#7B91BC] text-xs">—</span>
+                        : <span className={`font-mono text-sm ${r.clockOut > "19:00" ? "text-amber-400" : "text-[#7B91BC]"}`}>{r.clockOut}</span>}
+                    </td>
                     <td className="text-right">
-                      {ot > 0
+                      {!r.isLeave && ot > 0
                         ? <div className="flex items-center justify-end gap-1.5">
                             {r.otOverride !== undefined && <AlertTriangle size={11} className="text-amber-400" />}
                             <span className="font-mono font-bold text-amber-400">{ot.toFixed(1)}</span>
@@ -364,14 +377,16 @@ export default function AttendancePage() {
                         : <span className="text-[#7B91BC]">—</span>}
                     </td>
                     <td className="text-right">
-                      {ot > 0
+                      {!r.isLeave && ot > 0
                         ? <span className="font-mono text-sm font-bold text-amber-400">{rm(ot * 12)}</span>
                         : <span className="text-[#7B91BC]">—</span>}
                     </td>
                     <td>
-                      {r.overrideReason
-                        ? <span className="text-xs text-amber-400 italic">{r.overrideReason}</span>
-                        : <span className="text-[#7B91BC] text-xs">Auto</span>}
+                      {r.isLeave
+                        ? <span className="text-xs text-purple-400">Leave day</span>
+                        : r.overrideReason
+                          ? <span className="text-xs text-amber-400 italic">{r.overrideReason}</span>
+                          : <span className="text-[#7B91BC] text-xs">Auto</span>}
                     </td>
                     <td>
                       <button className="btn btn-ghost py-1 px-3 text-xs" onClick={() => openEdit(r)}>
@@ -405,26 +420,55 @@ export default function AttendancePage() {
               <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Date</label>
               <input className="inp" type="date" value={modal.data.date ?? ""} onChange={(e) => set("date", e.target.value)} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Clock In</label>
-                <input className="inp" type="time" value={modal.data.clockIn ?? ""} onChange={(e) => set("clockIn", e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Clock Out</label>
-                <input className="inp" type="time" value={modal.data.clockOut ?? ""} onChange={(e) => set("clockOut", e.target.value)} />
-              </div>
+
+            {/* Leave day toggle */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => set("isLeave", !modal.data.isLeave)}
+                className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 relative ${modal.data.isLeave ? "bg-purple-600" : "bg-[#1E2D4A]"}`}
+              >
+                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${modal.data.isLeave ? "left-5" : "left-1"}`} />
+              </button>
+              <span className="text-sm text-[#E8F0FF]">Mark as Leave Day</span>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">OT Override (hrs) — blank = auto</label>
-              <input className="inp" type="number" step="0.5" placeholder="e.g. 1.5" value={modal.data.otOverride ?? ""} onChange={(e) => set("otOverride", e.target.value ? parseFloat(e.target.value) : undefined)} />
-            </div>
-            {modal.data.otOverride !== undefined && (
+
+            {modal.data.isLeave ? (
               <div>
-                <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Override Reason</label>
-                <input className="inp" placeholder="Reason..." value={modal.data.overrideReason ?? ""} onChange={(e) => set("overrideReason", e.target.value)} />
+                <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Leave Type</label>
+                <select className="inp" value={modal.data.leaveType ?? ""} onChange={(e) => set("leaveType", e.target.value as LeaveType)}>
+                  <option value="">— Select Type —</option>
+                  <option value="annual">Annual Leave (AL)</option>
+                  <option value="medical">Medical Leave (MC)</option>
+                  <option value="off">Day Off (OFF)</option>
+                  <option value="leave">On Leave (OL)</option>
+                </select>
               </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Clock In</label>
+                    <input className="inp" type="time" value={modal.data.clockIn ?? ""} onChange={(e) => set("clockIn", e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Clock Out</label>
+                    <input className="inp" type="time" value={modal.data.clockOut ?? ""} onChange={(e) => set("clockOut", e.target.value)} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">OT Override (hrs) — blank = auto</label>
+                  <input className="inp" type="number" step="0.5" placeholder="e.g. 1.5" value={modal.data.otOverride ?? ""} onChange={(e) => set("otOverride", e.target.value ? parseFloat(e.target.value) : undefined)} />
+                </div>
+                {modal.data.otOverride !== undefined && (
+                  <div>
+                    <label className="block text-xs font-semibold text-[#7B91BC] mb-1.5 uppercase tracking-wider">Override Reason</label>
+                    <input className="inp" placeholder="Reason..." value={modal.data.overrideReason ?? ""} onChange={(e) => set("overrideReason", e.target.value)} />
+                  </div>
+                )}
+              </>
             )}
+
             <div className="flex justify-end gap-3 pt-2">
               <button className="btn btn-ghost" onClick={closeModal}>Cancel</button>
               <button className="btn btn-primary" onClick={saveModal} disabled={saving}>{saving ? "Saving..." : "Save"}</button>

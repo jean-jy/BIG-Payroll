@@ -78,6 +78,8 @@ export type AttendanceRecord = {
   otHours: number;
   otOverride?: number;
   overrideReason?: string;
+  isLeave?: boolean;
+  leaveType?: LeaveType;
 };
 
 export type PayrollAdjustment = {

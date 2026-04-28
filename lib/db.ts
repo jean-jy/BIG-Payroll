@@ -278,6 +278,8 @@ export async function fetchAttendanceRecords(month: string): Promise<AttendanceR
     otHours: r.ot_hours,
     otOverride: r.ot_override,
     overrideReason: r.override_reason,
+    isLeave: r.is_leave ?? false,
+    leaveType: r.leave_type ?? undefined,
   }));
 }
 
@@ -286,11 +288,13 @@ export async function upsertAttendance(a: Partial<AttendanceRecord>): Promise<At
     ...(a.id ? { id: a.id } : {}),
     staff_id: a.staffId,
     date: a.date,
-    clock_in: a.clockIn,
-    clock_out: a.clockOut,
-    ot_hours: a.otHours ?? 0,
-    ot_override: a.otOverride ?? null,
-    override_reason: a.overrideReason ?? null,
+    clock_in: a.isLeave ? "00:00" : a.clockIn,
+    clock_out: a.isLeave ? "00:00" : a.clockOut,
+    ot_hours: a.isLeave ? 0 : (a.otHours ?? 0),
+    ot_override: a.isLeave ? null : (a.otOverride ?? null),
+    override_reason: a.isLeave ? null : (a.overrideReason ?? null),
+    is_leave: a.isLeave ?? false,
+    leave_type: a.isLeave ? (a.leaveType ?? null) : null,
   };
   const { data, error } = await supabase
     .from("attendance_records")
@@ -303,6 +307,8 @@ export async function upsertAttendance(a: Partial<AttendanceRecord>): Promise<At
     clockIn: data.clock_in, clockOut: data.clock_out,
     otHours: data.ot_hours, otOverride: data.ot_override,
     overrideReason: data.override_reason,
+    isLeave: data.is_leave ?? false,
+    leaveType: data.leave_type ?? undefined,
   };
 }
 
