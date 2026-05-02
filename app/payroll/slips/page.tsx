@@ -3,13 +3,9 @@ import { useEffect, useState } from "react";
 import { Branch, Staff, TreatmentRecord, AttendanceRecord, TreatmentType } from "@/lib/types";
 import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes, fetchPerformanceAllowances, PerformanceAllowanceMap } from "@/lib/db";
 import { calcPayroll, rm } from "@/lib/calculations";
+import { MONTHS } from "@/lib/months";
 import { FileText, Download, Search } from "lucide-react";
 import Loading from "@/components/Loading";
-
-const MONTHS = [
-  { label: "April 2026", value: "2026-04" },
-  { label: "March 2026", value: "2026-03" },
-];
 const COMPANY_NAME = "Klinik Pergigian Harmoni Sdn Bhd";
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 const ROLE_LABEL: Record<string, string> = {

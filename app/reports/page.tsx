@@ -2,14 +2,10 @@
 import { useEffect, useState } from "react";
 import { Branch, Staff, TreatmentRecord, AttendanceRecord, TreatmentType } from "@/lib/types";
 import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes } from "@/lib/db";
-import { calcPayroll, rm } from "@/lib/calculations";
-import { Download, TrendingUp, DollarSign, Clock } from "lucide-react";
+import { calcPayroll, calcCommissionLine, rm } from "@/lib/calculations";
+import { MONTHS } from "@/lib/months";
+import { Download, TrendingUp, DollarSign, Clock, Home } from "lucide-react";
 import Loading from "@/components/Loading";
-
-const MONTHS = [
-  { label: "April 2026", value: "2026-04" },
-  { label: "March 2026", value: "2026-03" },
-];
 const BRANCH_COLOR: Record<string, { text: string; bar: string; bg: string }> = {
   a: { text: "#2DD4BF", bar: "#0D9488", bg: "rgba(13,148,136,0.12)" },
   b: { text: "#818CF8", bar: "#6366F1", bg: "rgba(99,102,241,0.12)" },
@@ -71,6 +67,37 @@ export default function ReportsPage() {
     txSummary[r.treatmentTypeId].revenue += r.fee;
   });
   const topTx = Object.values(txSummary).sort((a, b) => b.revenue - a.revenue).slice(0, 6);
+
+  const doctors = activeStaff.filter((s) => s.role === "resident_dentist" || s.role === "locum_dentist");
+  const ttMap = Object.fromEntries(tTypes.map((t) => [t.id, t]));
+  // Per-branch rows: keyed by where the records are, not the doctor's home branch
+  const doctorBranchRows = branches.flatMap((b) => {
+    const bRecords = records.filter((r) => r.branchId === b.id);
+    return doctors
+      .filter((doc) => bRecords.some((r) => r.staffId === doc.id))
+      .map((doc) => {
+        const docBranchRecords = bRecords.filter((r) => r.staffId === doc.id);
+        const collection = docBranchRecords.reduce((s, r) => s + r.fee, 0);
+        const commission = docBranchRecords.reduce((s, r) => {
+          const tt = ttMap[r.treatmentTypeId];
+          if (!tt || r.isOnHold || tt.isOnHold) return s;
+          return s + calcCommissionLine(r, tt, doc.commissionRate ?? 0).commission;
+        }, 0);
+        const payroll = payrolls.find((p) => p.staffId === doc.id);
+        return {
+          branchId: b.id,
+          id: doc.id,
+          name: doc.name,
+          role: doc.role,
+          isHomeBranch: doc.branchId === b.id,
+          collection,
+          commission,
+          grossPay: payroll?.grossPay ?? 0,
+          payBasis: payroll?.payBasis ?? ("basic" as const),
+        };
+      })
+      .sort((a, x) => x.collection - a.collection);
+  });
 
   if (loading) return <Loading text="Loading reports..." />;
 
@@ -181,7 +208,74 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div className="fade-up delay-4 rounded-2xl border border-[#1E2D4A] bg-[#0D1526] overflow-hidden">
+      <div className="fade-up delay-4 space-y-4">
+        <div className="px-1">
+          <h2 className="font-display font-bold text-sm uppercase tracking-widest text-[#7B91BC]">Doctor Breakdown by Branch</h2>
+        </div>
+        {branches.map((b) => {
+          const c = BRANCH_COLOR[b.colorKey];
+          const branchDoctors = doctorBranchRows.filter((d) => d.branchId === b.id);
+          if (branchDoctors.length === 0) return null;
+          const branchCollection = branchStats.find((bs) => bs.id === b.id)?.collection ?? 0;
+          return (
+            <div key={b.id} className="rounded-2xl border border-[#1E2D4A] bg-[#0D1526] overflow-hidden">
+              <div className="px-5 py-3 border-b border-[#1E2D4A]" style={{ background: c.bg }}>
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full" style={{ background: c.bar }} />
+                  <span className="font-display font-bold text-sm text-[#E8F0FF]">{b.name}</span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Doctor</th>
+                      <th className="text-right">Collection</th>
+                      <th className="text-right">% of Branch</th>
+                      <th className="text-right">Commission</th>
+                      <th className="text-right">Payroll (total)</th>
+                      <th className="text-right">Pay Basis</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {branchDoctors.map((d) => {
+                      const pct = branchCollection > 0 ? (d.collection / branchCollection) * 100 : 0;
+                      return (
+                        <tr key={d.id}>
+                          <td>
+                            <div className="flex items-center gap-1.5">
+                              <div>
+                                <p className="text-sm font-medium text-[#E8F0FF]">{d.name}</p>
+                                <p className="text-[10px] text-[#7B91BC]">{d.role === "resident_dentist" ? "Resident" : "Locum"}</p>
+                              </div>
+                              {d.isHomeBranch && <Home size={11} className="text-[#4A6FA5] shrink-0" title="Home branch" />}
+                            </div>
+                          </td>
+                          <td className="text-right font-mono text-sm font-bold" style={{ color: c.text }}>{rm(d.collection)}</td>
+                          <td className="text-right font-mono text-sm text-[#7B91BC]">{pct.toFixed(1)}%</td>
+                          <td className="text-right font-mono text-sm text-amber-400">{rm(d.commission)}</td>
+                          <td className="text-right font-mono text-sm text-[#E8F0FF]">
+                            {d.isHomeBranch ? rm(d.grossPay) : <span className="text-[#4A6FA5]">—</span>}
+                          </td>
+                          <td className="text-right">
+                            {d.isHomeBranch && (
+                              <span className={`text-xs font-mono px-2 py-0.5 rounded-full ${d.payBasis === "commission" ? "bg-amber-500/20 text-amber-400" : "bg-indigo-500/20 text-indigo-400"}`}>
+                                {d.payBasis}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="fade-up delay-5 rounded-2xl border border-[#1E2D4A] bg-[#0D1526] overflow-hidden">
         <div className="px-5 py-4 border-b border-[#1E2D4A]">
           <h2 className="font-display font-bold text-sm uppercase tracking-widest text-[#7B91BC]">Branch Summary Table</h2>
         </div>

@@ -4,17 +4,9 @@ import { Branch } from "@/lib/types";
 import { fetchBranches, insertTreatmentRecords, fetchTreatmentTypes, fetchStaff, deleteTreatmentRecordsByBranchMonth, fetchImportHistory, insertImportHistory, ImportHistoryEntry } from "@/lib/db";
 import { Upload, CheckCircle2, FileSpreadsheet, AlertCircle, X, Download, Trash2, ArrowRight } from "lucide-react";
 import Loading from "@/components/Loading";
+import { MONTHS } from "@/lib/months";
 
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
-
-const MONTHS = Array.from({ length: 12 }, (_, i) => {
-  const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() - i);
-  const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  const label = d.toLocaleDateString("en-MY", { month: "long", year: "numeric" });
-  return { label, value };
-});
 
 type PreviewRow = { date: string; staff: string; treatment: string; fee: number; labCost?: number; patient: string; saleCategory?: "treatment" | "product" | "medicine" };
 type RawRow = PreviewRow & { skipReason: string | null };

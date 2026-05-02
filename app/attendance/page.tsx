@@ -7,11 +7,7 @@ import { calcOtHours, rm } from "@/lib/calculations";
 import { Clock, Plus, Pencil, AlertTriangle, Upload, CheckCircle2, X, FileSpreadsheet, AlertCircle, LayoutList } from "lucide-react";
 import Loading from "@/components/Loading";
 import { supabase } from "@/lib/supabase";
-
-const MONTHS = [
-  { label: "April 2026", value: "2026-04" },
-  { label: "March 2026", value: "2026-03" },
-];
+import { MONTHS } from "@/lib/months";
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 const OT_ELIGIBLE = ["fulltime_da", "fulltime_dsa_monthly", "parttime_da"];
 

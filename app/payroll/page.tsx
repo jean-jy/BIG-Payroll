@@ -4,17 +4,9 @@ import { Branch, Staff, TreatmentRecord, AttendanceRecord, TreatmentType } from 
 import { fetchBranches, fetchStaff, fetchTreatmentRecords, fetchAttendanceRecords, fetchTreatmentTypes, fetchPayrollStatuses, finalisePayroll, finaliseAllPayroll, fetchPerformanceAllowances, upsertPerformanceAllowance, PerformanceAllowanceMap, updateMaterialCostOverride, updateLabCost, updateRecordOnHold, fetchPayrollAdjustments, insertPayrollAdjustment, updatePayrollAdjustment, deletePayrollAdjustment, AdjustmentMap } from "@/lib/db";
 import { PayrollAdjustment } from "@/lib/types";
 import { calcPayroll, rm } from "@/lib/calculations";
+import { MONTHS } from "@/lib/months";
 import { ChevronDown, ChevronRight, CheckCircle2, Lock, AlertCircle, ArrowUp, PauseCircle, PlayCircle, Plus, X, Pencil, Check } from "lucide-react";
 import Loading from "@/components/Loading";
-
-const MONTHS = [
-  { label: "April 2026",    value: "2026-04" },
-  { label: "March 2026",   value: "2026-03" },
-  { label: "February 2026", value: "2026-02" },
-  { label: "January 2026",  value: "2026-01" },
-  { label: "December 2025", value: "2025-12" },
-  { label: "November 2025", value: "2025-11" },
-];
 
 const BRANCH_DOT: Record<string, string> = { a: "#0D9488", b: "#6366F1", c: "#F43F5E" };
 const ROLE_SHORT: Record<string, string> = {
