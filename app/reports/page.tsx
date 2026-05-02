@@ -248,7 +248,7 @@ export default function ReportsPage() {
                                 <p className="text-sm font-medium text-[#E8F0FF]">{d.name}</p>
                                 <p className="text-[10px] text-[#7B91BC]">{d.role === "resident_dentist" ? "Resident" : "Locum"}</p>
                               </div>
-                              {d.isHomeBranch && <Home size={11} className="text-[#4A6FA5] shrink-0" title="Home branch" />}
+                              {d.isHomeBranch && <Home size={11} className="text-[#4A6FA5] shrink-0" />}
                             </div>
                           </td>
                           <td className="text-right font-mono text-sm font-bold" style={{ color: c.text }}>{rm(d.collection)}</td>
