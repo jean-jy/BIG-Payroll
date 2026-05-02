@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Printer } from "lucide-react";
 import { fetchStaff, fetchBranches, fetchDoctorSchedules, fetchClinicClosures } from "@/lib/db";
@@ -55,6 +55,10 @@ function shiftMonth(month: string, delta: number) {
 const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function SchedulePrintPage() {
+  return <Suspense><SchedulePrintInner /></Suspense>;
+}
+
+function SchedulePrintInner() {
   const searchParams = useSearchParams();
   const [month, setMonth] = useState(() => searchParams.get("month") ?? toMonthStr(new Date()));
   const [staff, setStaff] = useState<Staff[]>([]);
