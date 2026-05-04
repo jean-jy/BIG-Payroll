@@ -94,6 +94,7 @@ export default function AttendancePage() {
   const [importing, setImporting]         = useState(false);
   const [dragging, setDragging]           = useState(false);
   const [importedCount, setImportedCount] = useState(0);
+  const [importError, setImportError]     = useState<string | null>(null);
 
   useEffect(() => { load(month); }, [month]);
 
@@ -162,10 +163,11 @@ export default function AttendancePage() {
   }
 
   async function confirmCsvImport() {
-    if (!csvStaffId) { setError("Please select a staff member."); return; }
-    if (!csvRows.length) { setError("No valid rows found in CSV."); return; }
+    if (!csvStaffId) { setImportError("Please select a staff member."); return; }
+    if (!csvRows.length) { setImportError("No valid rows found in CSV."); return; }
     try {
       setImporting(true);
+      setImportError(null);
       const rows = csvRows.map((r) => ({
         staff_id: csvStaffId,
         date: r.date,
@@ -178,12 +180,17 @@ export default function AttendancePage() {
         leave_type: null,
       }));
       const { error: err } = await supabase.from("attendance_records").upsert(rows, { onConflict: "staff_id,date" });
-      if (err) throw err;
+      if (err) {
+        console.error("CSV import error:", err);
+        throw new Error(err.message ?? "Import failed");
+      }
       setImportedCount(rows.length);
       await load(month);
       setImportStep("done");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Import failed");
+      const msg = e instanceof Error ? e.message : "Import failed";
+      setImportError(msg);
+      console.error("confirmCsvImport:", e);
     } finally {
       setImporting(false);
     }
@@ -281,8 +288,13 @@ export default function AttendancePage() {
           <div className="px-5 py-3 border-t border-[#1E2D4A] bg-[#0a1020] flex justify-between items-center text-xs text-[#7B91BC]">
             <span>Total OT: <span className="font-mono text-amber-400 font-bold">{csvRows.reduce((s, r) => s + r.otHours, 0).toFixed(1)} hrs</span> · {rm(csvRows.reduce((s, r) => s + r.otHours, 0) * 12)}</span>
           </div>
+          {importError && (
+            <div className="px-5 py-2 border-t border-[#1E2D4A] text-xs text-red-400 bg-red-500/5">
+              {importError}
+            </div>
+          )}
           <div className="px-5 py-4 border-t border-[#1E2D4A] flex justify-end gap-3">
-            <button className="btn btn-ghost" onClick={() => setImportStep("idle")}>Cancel</button>
+            <button className="btn btn-ghost" onClick={() => { setImportStep("idle"); setImportError(null); }}>Cancel</button>
             <button className="btn btn-primary" onClick={confirmCsvImport} disabled={importing || !csvStaffId}>
               <CheckCircle2 size={14} /> {importing ? "Importing..." : `Import ${csvRows.length} Records`}
             </button>
