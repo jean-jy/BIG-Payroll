@@ -176,8 +176,6 @@ export default function AttendancePage() {
         ot_hours: r.otHours,
         ot_override: null,
         override_reason: null,
-        is_leave: false,
-        leave_type: null,
       }));
       const { error: err } = await supabase.from("attendance_records").upsert(rows, { onConflict: "staff_id,date" });
       if (err) {
