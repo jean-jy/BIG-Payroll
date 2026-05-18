@@ -180,8 +180,13 @@ export default function SchedulePage() {
     return new Set(Object.keys(scheduleMap[dateStr] ?? {}));
   }
 
+  function localDate(dateStr: string) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+
   function getSameWeekdayDates(dateStr: string): string[] {
-    const dow = new Date(dateStr).getDay();
+    const dow = localDate(dateStr).getDay();
     const [y, m] = month.split("-").map(Number);
     const dates: string[] = [];
     const d = new Date(y, m - 1, 1);
@@ -520,7 +525,7 @@ export default function SchedulePage() {
 
       {/* Closure modal */}
       {closureModal && (() => {
-        const date = new Date(closureModal);
+        const date = localDate(closureModal);
         const existing = closureMap[closureModal];
         const subtitle = `${date.toLocaleString("en-MY", { weekday: "long" })}, ${date.getDate()} ${formatMonthLabel(month)}`;
         return (
@@ -599,7 +604,7 @@ export default function SchedulePage() {
       {/* Add Duty Doctor modal */}
       {dutyModal && (() => {
         const avail = dentists.filter((d) => !scheduledIds(dutyModal).has(d.id));
-        const date = new Date(dutyModal);
+        const date = localDate(dutyModal);
         const subtitle = `${date.toLocaleString("en-MY", { weekday: "long" })}, ${date.getDate()} ${formatMonthLabel(month)} · ${activeBranch?.name}`;
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setDutyModal(null)}>
@@ -650,7 +655,7 @@ export default function SchedulePage() {
       {/* Add Leave modal */}
       {leaveModal && (() => {
         const avail = dentists.filter((d) => !scheduledIds(leaveModal).has(d.id));
-        const date = new Date(leaveModal);
+        const date = localDate(leaveModal);
         const subtitle = `${date.toLocaleString("en-MY", { weekday: "long" })}, ${date.getDate()} ${formatMonthLabel(month)}`;
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setLeaveModal(null)}>
