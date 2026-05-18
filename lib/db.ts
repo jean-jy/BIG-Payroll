@@ -412,7 +412,8 @@ export async function deletePayrollAdjustment(id: string) {
 export async function fetchDoctorSchedules(month: string): Promise<DoctorSchedule[]> {
   const [y, m] = month.split("-").map(Number);
   const start = `${month}-01`;
-  const end = new Date(y, m, 1).toISOString().slice(0, 10);
+  const nextMonth = new Date(y, m, 1);
+  const end = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}-01`;
   const { data, error } = await supabase
     .from("doctor_schedules")
     .select("*")

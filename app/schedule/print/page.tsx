@@ -52,7 +52,10 @@ function shiftMonth(month: string, delta: number) {
   return toMonthStr(new Date(y, m - 1 + delta, 1));
 }
 
-const TODAY = new Date().toISOString().slice(0, 10);
+function toDateStr(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+const TODAY = toDateStr(new Date());
 
 export default function SchedulePrintPage() {
   return <Suspense><SchedulePrintInner /></Suspense>;
@@ -134,7 +137,7 @@ function SchedulePrintInner() {
           {Array.from({ length: totalCells }).map((_, i) => {
             const dayIndex = i - firstDow;
             const day = dayIndex >= 0 && dayIndex < days.length ? days[dayIndex] : null;
-            const dateStr = day ? day.toISOString().slice(0, 10) : null;
+            const dateStr = day ? toDateStr(day) : null;
             const isToday = dateStr === TODAY;
             const closure = dateStr ? closureMap[dateStr] : null;
             const closureStyle = closure ? CLOSURE_STYLES[closure.type] : null;
@@ -208,7 +211,7 @@ function SchedulePrintInner() {
           {Array.from({ length: totalCells }).map((_, i) => {
             const dayIndex = i - firstDow;
             const day = dayIndex >= 0 && dayIndex < days.length ? days[dayIndex] : null;
-            const dateStr = day ? day.toISOString().slice(0, 10) : null;
+            const dateStr = day ? toDateStr(day) : null;
             const isToday = dateStr === TODAY;
             const isWeekend = day ? day.getDay() === 0 || day.getDay() === 6 : false;
             const closure = dateStr ? closureMap[dateStr] : null;
