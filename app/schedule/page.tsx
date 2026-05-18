@@ -72,6 +72,9 @@ const CLOSURE_STYLES: Record<ClosureType, { bg: string; banner: string; dot: str
 function toMonthStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
+function toDateStr(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function formatMonthLabel(month: string) {
   const [y, m] = month.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleString("en-MY", { month: "long", year: "numeric" });
@@ -88,7 +91,7 @@ function shiftMonth(month: string, delta: number) {
   return toMonthStr(new Date(y, m - 1 + delta, 1));
 }
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = toDateStr(new Date());
 
 export default function SchedulePage() {
   const [month, setMonth] = useState(toMonthStr(new Date()));
@@ -191,7 +194,7 @@ export default function SchedulePage() {
     const dates: string[] = [];
     const d = new Date(y, m - 1, 1);
     while (d.getMonth() === m - 1) {
-      if (d.getDay() === dow) dates.push(d.toISOString().slice(0, 10));
+      if (d.getDay() === dow) dates.push(toDateStr(d));
       d.setDate(d.getDate() + 1);
     }
     return dates;
@@ -321,7 +324,7 @@ export default function SchedulePage() {
         {Array.from({ length: totalCells }).map((_, i) => {
           const dayIndex = i - firstDow;
           const day = dayIndex >= 0 && dayIndex < days.length ? days[dayIndex] : null;
-          const dateStr = day ? day.toISOString().slice(0, 10) : null;
+          const dateStr = day ? toDateStr(day) : null;
           const isToday = dateStr === TODAY;
           const isWeekend = day ? day.getDay() === 0 || day.getDay() === 6 : false;
           const closure = dateStr ? closureMap[dateStr] : null;
