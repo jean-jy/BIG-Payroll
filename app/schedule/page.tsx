@@ -120,6 +120,8 @@ export default function SchedulePage() {
   const [saving, setSaving] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
   const [modalError, setModalError] = useState("");
+  const [dragScheduleId, setDragScheduleId] = useState<string | null>(null);
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
   const dentists = useMemo(
     () => staff.filter((s) => s.isActive && (s.role === "resident_dentist" || s.role === "locum_dentist")),
@@ -311,6 +313,26 @@ export default function SchedulePage() {
     }
   }
 
+  async function handleScheduleDrop(scheduleId: string, newDateStr: string) {
+    const sch = schedules.find((s) => s.id === scheduleId);
+    if (!sch || sch.date === newDateStr) return;
+    setSaving(true);
+    try {
+      await deleteDoctorSchedule(sch.id);
+      const saved = await upsertDoctorSchedule({
+        staffId: sch.staffId, date: newDateStr, branchId: sch.branchId,
+        isLeave: sch.isLeave, leaveType: sch.leaveType,
+      });
+      setSchedules((prev) => [...prev.filter((s) => s.id !== sch.id), saved]);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to move");
+    } finally {
+      setSaving(false);
+      setDragScheduleId(null);
+      setDragOverDate(null);
+    }
+  }
+
   function renderCalendarGrid(
     getCellItems: (dateStr: string) => DoctorSchedule[],
     onAdd: (dateStr: string) => void,
@@ -334,7 +356,11 @@ export default function SchedulePage() {
           return (
             <div
               key={i}
-              className={`min-h-[100px] border-r border-b border-[#1E2D4A] p-2 flex flex-col gap-1 ${
+              onDragOver={day ? (e) => { e.preventDefault(); setDragOverDate(dateStr!); } : undefined}
+              onDragLeave={day ? () => setDragOverDate(null) : undefined}
+              onDrop={day ? (e) => { e.preventDefault(); const id = e.dataTransfer.getData("scheduleId"); if (id) handleScheduleDrop(id, dateStr!); setDragOverDate(null); } : undefined}
+              className={`min-h-[100px] border-r border-b border-[#1E2D4A] p-2 flex flex-col gap-1 transition-colors ${
+                dragScheduleId && dragOverDate === dateStr ? "bg-teal-500/10 ring-1 ring-inset ring-teal-500/30" :
                 closure ? closureStyle!.bg :
                 !day ? "bg-[#04080F]/40" :
                 isWeekend ? "bg-[#0D1526]/25" : ""
@@ -361,7 +387,13 @@ export default function SchedulePage() {
                     )}
                   </div>
                   {items.map((sch) => (
-                    <div key={sch.id} className={`flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] font-600 ${chipColor(sch)}`}>
+                    <div
+                      key={sch.id}
+                      draggable
+                      onDragStart={(e) => { e.dataTransfer.setData("scheduleId", sch.id); setDragScheduleId(sch.id); }}
+                      onDragEnd={() => { setDragScheduleId(null); setDragOverDate(null); }}
+                      className={`flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] font-600 cursor-grab active:cursor-grabbing select-none transition-opacity ${chipColor(sch)} ${dragScheduleId === sch.id ? "opacity-30" : ""}`}
+                    >
                       <span className="truncate">{chipLabel(sch)}</span>
                       <button onClick={() => setRemoveConfirm(sch.id)} className="opacity-40 hover:opacity-100 flex-shrink-0 transition-opacity">
                         <X size={9} />
