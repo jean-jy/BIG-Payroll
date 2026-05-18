@@ -102,6 +102,7 @@ export default function SchedulePage() {
   const [selectedBranch, setSelectedBranch] = useState("");
   const [dutyModal, setDutyModal] = useState<string | null>(null);
   const [dutyStaffId, setDutyStaffId] = useState("");
+  const [dutyRecurring, setDutyRecurring] = useState(false);
 
   const [leaveModal, setLeaveModal] = useState<string | null>(null);
   const [leaveStaffId, setLeaveStaffId] = useState("");
@@ -179,9 +180,22 @@ export default function SchedulePage() {
     return new Set(Object.keys(scheduleMap[dateStr] ?? {}));
   }
 
+  function getSameWeekdayDates(dateStr: string): string[] {
+    const dow = new Date(dateStr).getDay();
+    const [y, m] = month.split("-").map(Number);
+    const dates: string[] = [];
+    const d = new Date(y, m - 1, 1);
+    while (d.getMonth() === m - 1) {
+      if (d.getDay() === dow) dates.push(d.toISOString().slice(0, 10));
+      d.setDate(d.getDate() + 1);
+    }
+    return dates;
+  }
+
   function openDuty(dateStr: string) {
     const avail = dentists.filter((d) => !scheduledIds(dateStr).has(d.id));
     setDutyStaffId(avail[0]?.id ?? "");
+    setDutyRecurring(false);
     setDutyModal(dateStr);
   }
 
@@ -190,8 +204,19 @@ export default function SchedulePage() {
     setSaving(true);
     setError("");
     try {
-      const saved = await upsertDoctorSchedule({ staffId: dutyStaffId, date: dutyModal, branchId: selectedBranch, isLeave: false });
-      setSchedules((prev) => [...prev.filter((s) => !(s.staffId === dutyStaffId && s.date === dutyModal)), saved]);
+      if (dutyRecurring) {
+        const dates = getSameWeekdayDates(dutyModal);
+        const results = await Promise.all(
+          dates.map((date) => upsertDoctorSchedule({ staffId: dutyStaffId, date, branchId: selectedBranch, isLeave: false }))
+        );
+        setSchedules((prev) => {
+          const filtered = prev.filter((s) => !(s.staffId === dutyStaffId && dates.includes(s.date)));
+          return [...filtered, ...results];
+        });
+      } else {
+        const saved = await upsertDoctorSchedule({ staffId: dutyStaffId, date: dutyModal, branchId: selectedBranch, isLeave: false });
+        setSchedules((prev) => [...prev.filter((s) => !(s.staffId === dutyStaffId && s.date === dutyModal)), saved]);
+      }
       setDutyModal(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save");
@@ -592,12 +617,28 @@ export default function SchedulePage() {
               ) : (
                 <>
                   <label className="text-xs font-700 uppercase tracking-widest text-[#7B91BC] block mb-2">Select Doctor</label>
-                  <select value={dutyStaffId} onChange={(e) => setDutyStaffId(e.target.value)} className="inp mb-5">
+                  <select value={dutyStaffId} onChange={(e) => setDutyStaffId(e.target.value)} className="inp mb-4">
                     {avail.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </select>
+                  <button
+                    type="button"
+                    onClick={() => setDutyRecurring((r) => !r)}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border text-xs font-600 transition-all mb-5 ${
+                      dutyRecurring
+                        ? "bg-teal-600/20 border-teal-500/60 text-teal-300"
+                        : "bg-[#131E35] text-[#7B91BC] border-[#1E2D4A] hover:border-[#2D4470] hover:text-[#E8F0FF]"
+                    }`}
+                  >
+                    <span>Repeat every {date.toLocaleString("en-MY", { weekday: "long" })} this month</span>
+                    <span className={`w-8 h-4 rounded-full transition-colors flex items-center flex-shrink-0 ${dutyRecurring ? "bg-teal-500" : "bg-[#1E2D4A]"}`}>
+                      <span className={`w-3 h-3 rounded-full bg-white ml-0.5 transition-transform ${dutyRecurring ? "translate-x-4" : ""}`} />
+                    </span>
+                  </button>
                   <div className="flex gap-2">
                     <button onClick={() => setDutyModal(null)} className="btn btn-ghost flex-1">Cancel</button>
-                    <button onClick={handleAddDuty} disabled={saving} className="btn btn-primary flex-1">{saving ? "Saving…" : "Assign"}</button>
+                    <button onClick={handleAddDuty} disabled={saving} className="btn btn-primary flex-1">
+                      {saving ? "Saving…" : dutyRecurring ? `Assign All ${date.toLocaleString("en-MY", { weekday: "short" })}s` : "Assign"}
+                    </button>
                   </div>
                 </>
               )}
